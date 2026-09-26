@@ -4,8 +4,8 @@ Status: **in progress.**
 - §2 (peer messaging) is **built, 2026-09-26**.
 - §3 (monitors) is **built, 2026-09-26** (item 136).
 - §4 (an in-process supervisor) is **built, 2026-09-26**, with `fresh`
-  restarts (item 137). `resubmit`, `rewind` and escalation to an agent are
-  item 139.
+  restarts (item 137).
+- §4.1 (an agent as supervisor) is items 139 and 140.
 - §5 (a durable supervisor) is parked behind item 133 (item 138).
 
 Written 2026-09-26, after a source review of `danieljvdm/effect-agent`
@@ -175,6 +175,95 @@ reports up:
 
 That last one is what OTP does not have. The deterministic policy runs
 below, and judgement is applied where the policy gives up.
+
+## 4.1 An agent as supervisor
+
+Status: **slice 1 in progress** (item 139), and **slice 2 open** (item 140).
+
+**The shape.** The deterministic supervisor handles what a rule can:
+restarting a provider hiccup, and giving up after too many restarts. Where
+it would give up, it consults an agent instead. The agent reads the
+situation and acts through tools, and its last tool decides whether the
+supervisor carries on or gives up.
+
+The other shape, an agent that decides every exit, stays available: slice 2
+adds `"ask"` as a third answer for `classify`. It is not the default,
+because judgement costs a model call, and so it belongs where the rules
+have run out.
+
+**How a consultation runs.**
+1. The supervisor reaches a point where it would give up: a failure it would
+   not restart, the restart limit, the budget, or an unknown outcome.
+2. The children that are still running keep running. The one that exited
+   stays down.
+3. The supervisor opens a pending decision and calls `notify` with a
+   description of the situation. `toInbox(sessionId)` is the usual `notify`:
+   it puts a framework item on `Messaging`'s queue.
+4. The agent reads the description and acts through the tools.
+5. `resume` lets the supervisor carry on. `give_up(reason)` makes it
+   escalate, with the agent's reason in the detail.
+6. With no decision within `timeout`, the supervisor gives up exactly as it
+   would have without the agent. A supervising agent that fails, or never
+   answers, cannot leave the tree stuck.
+
+**Wiring without a cycle.** `Supervisor.control()` makes a plain value whose
+tools close over it. `run` attaches to that control while it runs, and
+detaches when it ends.
+- The agent is built with `control.tools`.
+- The supervisor is given `ask({ control, notify, timeout })`.
+- Neither needs the other's context, so there is no cycle and no service
+  to provide.
+
+**The tools.** Every tool belongs to one control, so to one supervisor, and
+a child id must name one of that supervisor's children.
+
+| tool | slice | effect | bounds |
+| --- | --- | --- | --- |
+| `list_children` | 1 | each child's status, starts and last failure, plus the supervisor's spend | read-only |
+| `inspect_child(id)` | 1 | the child's status, and for a task, the tail of its latest session's history | bounded characters |
+| `restart_child(id, instructions?)` | 1 | start the child again. `instructions` seeds a fresh restart's session with a supervisor note | intensity and the budget apply, plus the allowance. **Refused for an unknown outcome** |
+| `stop_child(id)` | 1 | stop a running child | none |
+| `resume(note?)` / `give_up(reason)` | 1 | end the consultation | none |
+| `steer_child(id, text)` | 2 | steer a running task through its session | text labelled as the supervisor's |
+| `start_child(template, input)` | 2 | start a child from a template declared up front | no agent, tool or model chosen by the model |
+
+The tools that change anything (`restart_child`, `stop_child`, `resume`,
+`give_up`) act only while a decision is pending. At any other time they
+answer that the supervisor is handling its children. An agent that manages
+every exit is `"ask"`, in slice 2.
+
+**Limits no conversation removes.**
+- **The budget.** `maxTokens` is never exceeded.
+- **Intensity**, except through the allowance. `ask({ grant: { restarts: n } })`
+  gives the agent `n` restarts beyond the limit, for the life of the
+  supervisor. It defaults to 0: when the supervisor gave up on intensity,
+  the agent can then only stop children, resume the rest, or give up.
+- **An unknown outcome.** `restart_child` refuses a child whose last exit
+  carried `DurableToolUnresolvedError`. Resolving it is a person's job (item
+  133).
+- **The host's permissions.** Each tool is an ordinary tool, so `Permission`
+  can gate it.
+
+**Keeping a task's session.** `inspect_child` reads a task's latest session,
+and `resubmit` asks that same session again, with the earlier attempt in its
+history. So a task tells the supervisor its session through `CurrentChild`,
+a context reference the supervisor provides to each start.
+- A `resubmit` task's session lives in the supervisor's scope, and ends with
+  the supervisor.
+- A `fresh` task's session ends with its start. Its history can still be read
+  afterwards.
+- Instructions seed a *fresh* restart's session: the agent's instructions,
+  then the supervisor's note, as system messages. A `resubmit` session
+  already holds its history and takes guidance by steering, in slice 2.
+
+**The record.** `Report.decisions` lists each consultation: the child, the
+reason, what the agent did, and how it ended (`resumed`, `gave-up` or
+`timed-out`).
+
+**Not in slice 1.**
+- The supervising agent's own turns are not charged to the supervisor's
+  budget. It is a separate session, under whatever budget it has.
+- `rewind` waits on a use.
 
 ## 5. A durable supervisor (parked)
 

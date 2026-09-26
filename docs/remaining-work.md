@@ -1194,19 +1194,31 @@ over it. §2 (peer messaging), §3 (monitors, item 136) and the first slice of
 §4 (the in-process supervisor, item 137) landed the same day and are in the
 ledger.*
 
-139. **Supervisor restart modes and escalation to an agent (plan §4).**
-     Item 137 built `fresh` restarts and escalation as a typed failure.
-     Still open:
-     - **`resubmit`**: the same session, asked again. The child has to hold a
-       session across starts.
-     - **`rewind`**: a branch from the last good node, through `/tree`.
-     - **An escalation into an agent's inbox**, with `restart_child`,
-       `replace_child` and `give_up` tools for the model that reads it.
+139. **An agent as supervisor, slice 1 (plan §4.1).**
+     - `Supervisor.control()`, and `ask({ control, notify, timeout, grant })`.
+     - A consultation where the supervisor would give up.
+     - `list_children`, `inspect_child`, `restart_child(id, instructions?)`,
+       `stop_child`, `resume` and `give_up`.
+     - `resubmit` tasks, and `CurrentChild` to keep a task's session.
+     - `Report.decisions`.
 
      Medium.
 
      ```text
      verify: no-grep "resubmit" src/sessions/Supervisor.ts
+     ```
+
+140. **An agent as supervisor, slice 2 (plan §4.1).**
+     - `steer_child`.
+     - Templates and `start_child`.
+     - `"ask"` as a classifier answer, so an agent can decide every exit.
+     - Charging the supervising agent's turns to the supervisor's budget.
+     - `rewind`, when a use appears.
+
+     After 139. Medium.
+
+     ```text
+     verify: no-grep "steer_child" src/sessions/Supervisor.ts
      ```
 
 138. **A durable supervisor (plan §5).** A supervisor as a cluster
