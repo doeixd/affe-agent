@@ -3190,3 +3190,41 @@ verify: grep "only the recipient may reply" test/Messaging.test.ts
      verify: grep "ToolExecution.scheduled(tool, { name: tool.name, params: inputData.success })(drained)" src/code/CodeMode.ts
      ```
 
+## 2026-09-26 - item 130: in-process event retention
+
+130. ~~**One event-retention seam (plan 4).**~~ **DONE 2026-09-26, with one
+     mechanism kept apart on purpose.**
+     - **The record.** Each in-process session keeps a bounded record of its
+       recent envelopes (`internal/eventRing.ts`, `retainedEvents`, default
+       256). It is fed from the session's synchronous `eventSink`, through
+       `makeEngine`, since the public `make` takes no sink.
+     - **Resuming.** `events({ after })` subscribes first, then replays the
+       record after the cursor, then continues live, dropping any repeat by
+       sequence.
+     - **Refusal.** A cursor behind the record is refused with
+       `AgentInvalidRequestError`, as the host's tail refuses one.
+     - **Beyond the in-process client.** RPC and the relay resume too,
+       through the host, which passes the cursor through. Their conformance
+       harnesses, and the in-process ones, now declare `resumesEvents: true`
+       and pass the resumption case.
+
+     **Kept apart, by decision.** The host's tail still serves `eventLog`.
+     Letting a session's record replace it would ignore the operator's
+     `maxRetainedEvents`, and the boundary the host reports (`oldest` is
+     when the host began holding the session). Five host tests caught
+     exactly that when the record first offered `eventLog`. `Agent.start`'s
+     bounded trace also stays its own: it is one submission's replay, with
+     limits of its own.
+
+     `test/EventRetention.test.ts` covers the window, the refusal, a replay
+     continuing live, and `retainedEvents: 0`. Serving a hole was broken
+     once, and a test failed. Two rules guard a race rather than a sequence
+     a test can force: the repeat filter, and subscribing before reading.
+     They cover an envelope emitted between the subscription and the read.
+
+     ```text
+     verify: exists src/internal/eventRing.ts
+     verify: grep "const recorded = yield* log.since(after)" src/client/AgentClient.ts
+     verify: grep "a cursor behind the window is refused, never answered with a hole" test/EventRetention.test.ts
+     ```
+

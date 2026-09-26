@@ -740,6 +740,9 @@ describe("AgentRpc", () => {
  */
 const contractHarness: Contract.Harness = {
   name: "rpc",
+  // The in-process session behind the host keeps a bounded record, and the
+  // host passes a cursor through to it (item 130).
+  resumesEvents: true,
   layer: ({ agent, turns, elicitation, maxRetainedSubmissions }) =>
     Effect.gen(function* () {
       const { layer: model } = yield* TestLanguageModel.script(turns)

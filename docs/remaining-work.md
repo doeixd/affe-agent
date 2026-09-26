@@ -1081,20 +1081,6 @@ owner. Client capabilities were considered and left declined (item 86).*
      verify: grep "Workflow stalls on workerd" src/cloudflare/index.ts
      ```
 
-130. **One event-retention seam (plan 4).** Three mechanisms retain events
-     today: the host's bounded tail (default 256), `Agent.start`'s trace,
-     and `DeliveryLog`. The in-process client cannot resume at all.
-     - Proposal: an `EventLog` on the session, with a bounded ring by
-       default, which refuses rather than serve a gap. `DeliveryLog` becomes
-       its durable implementation.
-
-     Medium.
-
-     ```text
-     verify: grep "options.maxRetainedEvents ?? 256" src/client/internal/sessionHost.ts
-     verify: grep "this session has no delivery log, so events cannot be resumed from a sequence" src/client/AgentClient.ts
-     ```
-
 131. **Version the core apart from experimental subpaths (plan 6). Gated on
      the owner's release plans; decide before 1.0.** One package, one
      version, 53 import subpaths, most labelled experimental, so the "core"

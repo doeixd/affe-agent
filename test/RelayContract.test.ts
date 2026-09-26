@@ -83,6 +83,9 @@ const node = (url: string, id: Relay.PeerId, token: string) =>
 
 const harness: Contract.Harness = {
   name: "relay",
+  // The in-process session behind the host keeps a bounded record, and the
+  // host passes a cursor through to it (item 130).
+  resumesEvents: true,
   layer: ({ agent, turns, elicitation, maxRetainedSubmissions }) =>
     Effect.succeed(
       /**

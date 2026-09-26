@@ -12,6 +12,7 @@ import * as AgentInput from "../AgentInput.js"
 import type * as AgentProtocol from "./AgentProtocol.js"
 import * as InputBoundary from "../internal/inputBoundary.js"
 import * as AgentSession from "../AgentSession.js"
+import * as EventRing from "../internal/eventRing.js"
 import * as Observation from "../internal/observation.js"
 import { AgentObservationLagError } from "../Errors.js"
 import type * as Elicitation from "../Elicitation.js"
@@ -580,6 +581,18 @@ export const fromSession = <Value, Input>(
      * does not carry the typed value, which is what every host did until now.
      */
     readonly output?: Option.Option<AgentOutput.AgentOutput<any, any>> | undefined
+    /**
+     * A record of the session's recent envelopes, fed from its event sink.
+     * With one, `events({ after })` resumes from a cursor inside its window;
+     * without one, a cursor is refused.
+     *
+     * It backs `events` only, not `eventLog`. A host keeps its own bounded
+     * tail for finite reads, sized by the operator's `maxRetainedEvents` and
+     * measured from when the host began holding the session. A session that
+     * offered `eventLog` would replace that tail, and ignore the operator's
+     * bound.
+     */
+    readonly log?: EventRing.EventRing | undefined
   }
 ): RemoteSession => {
   const bound = Observation.boundOf("AgentClient", options.maxObservationLag)
@@ -825,19 +838,53 @@ export const fromSession = <Value, Input>(
      * missing capability instead, which is something a deployment can act on:
      * the durable client is the one that can do this.
      */
-    events: (eventOptions) =>
-      eventOptions?.after === undefined
-        ? Stream.unwrap(AgentSession.subscribeEvents(session, { ...bound, sessionId }))
-        : Stream.fail(
+    events: (eventOptions) => {
+      const after = eventOptions?.after
+      if (after === undefined) return Stream.unwrap(AgentSession.subscribeEvents(session, { ...bound, sessionId }))
+      const log = options.log
+      if (log === undefined) {
+        return Stream.fail(
           new AgentTransportError({
             sessionId: session.id,
             detail:
               "this session has no delivery log, so events cannot be resumed from a sequence; use the durable client for resumable delivery"
           })
         )
+      }
+      return Stream.unwrap(Effect.gen(function*() {
+        // Subscribe first, then read the record: an envelope emitted between
+        // the two is in both, and the sequence filter drops the repeat. One
+        // emitted before the subscription is in the record. So nothing is
+        // missed, and nothing is delivered twice.
+        const live = yield* AgentSession.subscribeEvents(session, { ...bound, sessionId })
+        const recorded = yield* log.since(after)
+        if (Option.isNone(recorded)) return yield* behindWindow(after, log)
+        const replayed = recorded.value
+        const last = replayed.length === 0 ? after : replayed[replayed.length - 1]!.sequence
+        return Stream.concat(
+          Stream.fromIterable(replayed),
+          live.pipe(Stream.filter((envelope) => envelope.sequence > last))
+        )
+      }))
+    },
   }
   return remoteSession
 }
+
+/**
+ * A cursor behind a bounded record is refused, never answered with a hole:
+ * the reader asked for everything after it, and part of that is gone.
+ */
+const behindWindow = (after: number, log: EventRing.EventRing) =>
+  Effect.flatMap(log.bounds, ({ oldest }) =>
+    Effect.fail(
+      new AgentInvalidRequestError({
+        operation: "events",
+        detail: `events after ${after} are no longer retained; the oldest held is ${
+          Option.getOrElse(Option.map(oldest, String), () => "none")
+        }`
+      })
+    ))
 
 /** Re-exported so the protocol modules can name them beside the other client errors. */
 export { AgentObservationLagError, AgentSubmissionNotFoundError }
@@ -870,6 +917,13 @@ export const layer = <Tools extends Record<string, Tool.Any>, E, R, Model, Value
     readonly maxRetainedSubmissions?: number | undefined
     /** See `fromSession`. */
     readonly maxObservationLag?: Observation.LagOptions | undefined
+    /**
+     * How many recent envelopes each session keeps, so `events({ after })`
+     * can resume from a cursor inside that window. Default 256, the same as
+     * `AgentSessionHost`'s tail. A cursor behind it is refused. `0` keeps
+     * none, and every cursor is refused.
+     */
+    readonly retainedEvents?: number | undefined
   }
 ): Layer.Layer<AgentClient, never, Model | R> =>
   Layer.effect(
@@ -880,10 +934,20 @@ export const layer = <Tools extends Record<string, Tool.Any>, E, R, Model, Value
 
       const createSession: Service["createSession"] = (sessionOptions) =>
         Effect.gen(function* () {
-          const { maxObservationLag, maxRetainedSubmissions, ...sessionMake } = options ?? {}
+          const { maxObservationLag, maxRetainedSubmissions, retainedEvents, ...sessionMake } = options ?? {}
           const scope = yield* Effect.scope
-          const session = yield* AgentSession.make(agent, {
+          const keep = retainedEvents ?? 256
+          if (!Number.isSafeInteger(keep) || keep < 0) {
+            return yield* Effect.die(new RangeError("AgentClient retainedEvents must be a non-negative integer"))
+          }
+          const log = keep === 0 ? undefined : yield* EventRing.make(keep)
+          // `makeEngine`, not `make`: the record is fed from the session's
+          // synchronous `eventSink`, an engine option the public `make` does
+          // not take. `MakeOptions` has no sink of its own, so the record is
+          // the only one.
+          const session = yield* AgentSession.makeEngine(agent, {
             ...sessionMake,
+            ...(log === undefined ? {} : { eventSink: log.record }),
             ...(sessionOptions?.sessionId === undefined
               ? {}
               : { sessionId: sessionOptions.sessionId }),
@@ -902,6 +966,7 @@ export const layer = <Tools extends Record<string, Tool.Any>, E, R, Model, Value
           const remote = fromSession(session, {
             output: agent.output,
             scope,
+            ...(log === undefined ? {} : { log }),
             maxRetainedSubmissions: maxRetainedSubmissions ?? defaultRetainedSubmissions,
             ...(maxObservationLag === undefined ? {} : { maxObservationLag })
           })

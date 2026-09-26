@@ -16,6 +16,8 @@ import * as Contract from "./AgentClientContract.js"
  */
 const harness: Contract.Harness = {
   name: "local",
+  // A bounded in-memory record answers a cursor inside its window (item 130).
+  resumesEvents: true,
   layer: ({ agent, turns, elicitation, maxRetainedSubmissions }) =>
     Effect.map(TestLanguageModel.script(turns), ({ layer: model }) =>
       AgentClient.layer(agent, {

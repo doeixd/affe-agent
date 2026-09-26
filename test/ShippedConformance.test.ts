@@ -111,6 +111,8 @@ describe("AgentClientConformance", () => {
   const wiring = (
     decorate: (real: AgentClient.Service) => AgentClient.Service
   ): AgentClientConformance.Options => ({
+    // The in-process client keeps a bounded record of each session (item 130).
+    resumesEvents: true,
     layer: ({ agent, turns, elicitation, maxRetainedSubmissions }) =>
       Effect.map(TestLanguageModel.script(turns), ({ layer: model }) =>
         Layer.effect(
@@ -214,6 +216,7 @@ describe("AgentClientConformance", () => {
       // through the client's own typed error, and the report carries that
       // error's detail rather than a defect dump.
       const report = yield* AgentClientConformance.run({
+        resumesEvents: true,
         layer: ({ turns }) =>
           Effect.map(TestLanguageModel.script(turns), ({ layer: model }) =>
             AgentClient.layer(Agent.make({ loop: AgentLoop.bounded(1) })).pipe(Layer.provide(model))

@@ -94,6 +94,18 @@ client establishes its delivery-log subscription first; without a log it
 refuses rather than offer a stream that may have missed its start. The
 contract (`AgentClientConformance`) holds every client to these.
 
+**Resuming an in-process session.** The in-process client keeps a bounded
+record of each session's recent envelopes (`retainedEvents`, default 256).
+- `events({ after })` replays the record after the cursor, then continues
+  live, with no gap and no repeat.
+- A cursor behind the record is refused with `AgentInvalidRequestError`,
+  never answered with a hole.
+- A host or RPC client in front of an in-process session resumes the same
+  way, because the host passes the cursor through.
+- Finite reads (`eventLog`) stay with the host's own tail, which the
+  operator sizes with `maxRetainedEvents`.
+- Only the durable client keeps everything.
+
 That is deliberately *not* `AgentTransportError`. An agent failure is a property
 of the request and will recur, so wearing the transport tag would turn a
 caller's retry policy into a loop with a model call per attempt. The same

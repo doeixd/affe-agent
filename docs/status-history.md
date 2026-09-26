@@ -6628,3 +6628,16 @@ two internal functions, and every entry point passes through them:
 Code mode's nested calls had their own copy of the permission handling, and
 it dropped "allow always". Now they share the direct path's copy.
 
+## 2026-09-26 - in-process sessions resume from a cursor
+
+Item 130. The in-process client keeps a bounded record of each session's
+recent envelopes, fed from the session's synchronous sink.
+- `events({ after })` resumes inside it with no gap and no repeat, where it
+  used to fail outright.
+- RPC and the relay resume too, through the host.
+- A cursor behind the record is refused.
+
+The host's own tail still serves `eventLog`. When the record was offered in
+its place, five host tests failed: it would have ignored the operator's
+`maxRetainedEvents` and the host's own `oldest` boundary.
+
