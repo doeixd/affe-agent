@@ -6389,3 +6389,24 @@ checked after it). The suite is green on Windows now: 2635 tests, 0 failures.
 
 This file is not part of the session's subagent work and failed identically at
 `origin/main`; it was fixed at the owner's request.
+
+## 2026-09-26 - an architecture document
+
+`docs/architecture.md` is the one place that says how the parts fit:
+- the five kinds of module and their dependency direction;
+- the session state machine and the submission -> run -> turn nesting;
+- a turn step by step, and the event bus;
+- the tool-call pipeline, from exposure through permission and elicitation to
+  settlement;
+- durability as seam substitution, with the journaled activity names;
+- the client/host boundary and the adapters over it;
+- the relay, cluster and Cloudflare placements;
+- portability and frozen identifiers.
+
+It was written from a read of `src/` at `add04a3`, not from the plans.
+
+An architecture document is exactly the kind of text that goes stale quietly,
+so it is the fourth file `verify:remaining-work` scans. It pins the mechanisms
+it names and the test case behind each invariant in its table. One pin was
+broken once to confirm the check fires on it.
+

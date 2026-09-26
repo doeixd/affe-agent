@@ -21,6 +21,7 @@ and work awaiting a caller or external evidence.
 
 | document | what it is |
 | --- | --- |
+| [architecture.md](./architecture.md) | How the parts fit: the layers, one turn end to end, events, the tool pipeline, durability as seam substitution, the client/host boundary, portability, and the invariants with the test that holds each. Read before the guides. |
 | [guide-sessions.md](./guide-sessions.md) | What a local session does: steering, follow-ups, interruption, streaming, elicitation, events, errors, authoring, snapshots, testing. |
 | [guide-permissions.md](./guide-permissions.md) | The `Permission` seam: allow / ask / deny, rules, exceptions, remembered grants. |
 | [guide-sandbox.md](./guide-sandbox.md) | `/sandbox`, the coding toolkits, the `shell` dialect, and the Claude Code / OpenCode bridges. |
