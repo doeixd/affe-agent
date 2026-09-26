@@ -841,11 +841,15 @@ const executeSettled = <Tools extends Record<string, Tool.Any>, R>(
   call: Response.ToolCallParts<Tools, "encoded">,
   context: TurnContext<R>
 ) =>
-  Effect.flatMap(ToolScheduling.Current, (scheduling) =>
-    Effect.tap(
-      scheduling.around({ name: call.name, params: call.params })(executeOne(handler, call, context)),
-      () => turnFailpoints.hit("after-tool-call")
-    ))
+  Effect.flatMap(ToolScheduling.Current, (scheduling) => {
+    const tool = handler.tools[call.name as keyof Tools]
+    // A container's nested calls are scheduled one by one; holding the
+    // container as well would deadlock them (`ToolScheduling.Container`).
+    const scheduled = tool !== undefined && Context.get(tool.annotations, ToolScheduling.Container)
+      ? executeOne(handler, call, context)
+      : scheduling.around({ name: call.name, params: call.params })(executeOne(handler, call, context))
+    return Effect.tap(scheduled, () => turnFailpoints.hit("after-tool-call"))
+  })
 
 /** What a handler's stream folds into: its final result, and its last. */
 interface Collected<Tools extends Record<string, Tool.Any>> {

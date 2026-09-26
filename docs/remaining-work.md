@@ -1022,26 +1022,6 @@ steps are each rebuilt, whole or in part, wherever they are needed. The plan
 holds the argument. Two items conflict with `PLAN.md` and wait on the
 owner. Client capabilities were considered and left declined (item 86).*
 
-125. **Code mode bypasses host scheduling.** `CodeMode.invoke` calls
-     `ToolExecution.decide` and then `group.handle`, and
-     `ToolScheduling.Current` is applied only in `ToolExecution`'s
-     `executeSettled`. A tool the host serialises with
-     `ToolScheduling.serialize` is therefore not serialised when a model
-     calls it through `execute`.
-     - Fix: route nested calls through the host's `around`.
-     - Test: write one first that overlaps two nested calls of a serialised
-       tool, and watch it fail.
-     - Also check under `/durable`. An `Ask` inside a program likely meets
-       `DurableElicitationInToolCallError`, and no test pairs `/code` with a
-       durable host.
-
-     Small.
-
-     ```text
-     verify: no-grep "ToolScheduling" src/code/CodeMode.ts
-     verify: grep "group.handle(name, inputData.success)" src/code/CodeMode.ts
-     ```
-
 126. **One internal path for every tool call (plan 1a).** Extract the
      per-call stages (strategy slot, host scheduling, decide, approval,
      handler and progress, settlement) from `ToolExecution.execute` into one
@@ -1052,7 +1032,8 @@ owner. Client capabilities were considered and left declined (item 86).*
      - Open question: do nested calls emit their own correlated tool-call
        events, or stay on the progress channel?
 
-     Subsumes 125's fix if done first. Medium.
+     Item 125 (closed) routed code mode's nested handlers through host
+     scheduling directly; this would make that one shared path. Medium.
 
      ```text
      verify: grep "ToolExecution.decide(tool, {" src/code/CodeMode.ts

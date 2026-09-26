@@ -3,6 +3,7 @@ import { Tool } from "effect/unstable/ai"
 import * as Agent from "../Agent.js"
 import type * as Elicitation from "../Elicitation.js"
 import type * as Permission from "../Permission.js"
+import * as ToolScheduling from "../ToolScheduling.js"
 import * as Catalog from "./Catalog.js"
 import * as CodeMode from "./CodeMode.js"
 
@@ -252,7 +253,7 @@ const build = <Groups extends CodeMode.ToolGroups, R>(
     }${catalog.text}`,
     parameters: Parameters,
     success: Result
-  })
+  }).annotate(ToolScheduling.Container, true)
 
   const runtime = CodeMode.make<Groups, R>({
     tools: options.tools,

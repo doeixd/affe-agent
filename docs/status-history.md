@@ -6436,3 +6436,25 @@ The proposals, and how each stands against the record:
   This review found no case that meets that item's reopen trigger, so the
   proposal is recorded but not reopened.
 
+## 2026-09-26 - host scheduling holds the calls that do work
+
+Item 125, from the architecture review. Code mode's nested calls ran without
+the host's `ToolScheduling`, so a tool the host serialised could overlap
+itself when a program called it.
+
+The probe written for that fix found an older fault. Under
+`maxConcurrent(1)`, a `Subagent.tool` call held the only permit while its
+child's tool call waited for it, and the run hung for ever.
+
+`ToolScheduling.Container` fixes both, by marking a tool whose work is other
+tool calls:
+- the scheduling skips a container call;
+- it holds each nested call as it would a direct one;
+- `execute`, `Subagent.tool`, `toolScoped` and `Subagent.durable` are
+  containers.
+
+The design follows `effect-agent`'s broker, where programmatic calls pass the
+same preflight as direct ones. Two tests in `test/ToolScheduling.test.ts`
+failed before the fix, and each half of the fix was broken once to show they
+still catch it.
+

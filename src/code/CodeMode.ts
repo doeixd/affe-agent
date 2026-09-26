@@ -4,6 +4,7 @@ import type { Tool, Toolkit } from "effect/unstable/ai"
 import * as Elicitation from "../Elicitation.js"
 import * as Permission from "../Permission.js"
 import * as ToolExecution from "../ToolExecution.js"
+import * as ToolScheduling from "../ToolScheduling.js"
 import { CodeDiagnostic } from "./internal/diagnostics.js"
 import { internalKind, interpret, ProgramThrow, type Invoke, type ProgramFailure } from "./internal/interpret.js"
 import { parse } from "./internal/parse.js"
@@ -448,6 +449,10 @@ export const make = <Groups extends ToolGroups, R = never>(
       const permits = concurrency === undefined
         ? undefined
         : yield* Semaphore.make(positiveInteger("CodeMode maxConcurrentCalls", concurrency))
+      // The host's scheduling, which holds each nested call as it would a
+      // direct one. `execute` itself is a `ToolScheduling.Container`, so it
+      // holds no permit of its own while these wait for theirs.
+      const scheduling = yield* ToolScheduling.Current
 
       const observed = (
         path: ReadonlyArray<string>,
@@ -635,7 +640,11 @@ export const make = <Groups extends ToolGroups, R = never>(
             unknown,
             ServicesOf<Groups>
           >
-          const handled = yield* Effect.result(drained)
+          // The handler, not the approval wait above: a program parked on a
+          // question holds no lock another session's call is queued behind.
+          const handled = yield* Effect.result(
+            scheduling.around({ name: tool.name, params: inputData.success })(drained)
+          )
 
           if (Result.isFailure(handled)) {
             // A tool's declared failure is a value the program branches

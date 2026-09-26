@@ -310,7 +310,12 @@ still overlap; `maxConcurrent(n)` caps every call in the process; `all(...)`
 applies several. A scheduling wraps each call and can only make it wait, never
 start one, so it tightens the agent's concurrency and cannot widen it: a host
 allowing ten does not make a `Sequential` agent run two. A queued call is not
-announced; `ToolCallStarted` means it runs. Under `/durable` the agent's
+announced; `ToolCallStarted` means it runs. A tool whose work is other tool
+calls -- `/code`'s `execute`, and the subagent tools, which wait on a child
+session -- is a `ToolScheduling.Container`: the scheduling skips it and holds
+each of its nested calls as it would a direct one, so a program's two
+`book_room` calls stay apart and a delegation under `maxConcurrent(1)` does
+not wait on its own permit. Under `/durable` the agent's
 strategy is journalled at a submission's first execution, so a run recovered
 by a differently configured process runs its tools as it was admitted.
 

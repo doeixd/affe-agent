@@ -12,6 +12,7 @@ import type * as DurableSessionStore from "../durable/DurableSessionStore.js"
 import * as InputBoundary from "../internal/inputBoundary.js"
 import { CurrentSessionId } from "../internal/currentSession.js"
 import { CurrentPrincipal } from "../Principal.js"
+import * as ToolScheduling from "../ToolScheduling.js"
 
 /**
  * Durable delegation: a subagent that runs as a **child session**, its own
@@ -150,7 +151,7 @@ export const durable = <Tools extends Record<string, Tool.Any>, E, R, Value, Inp
       parameters: parametersOf(declared),
       success: successOf<Value>(child),
       failure: Schema.String
-    }),
+    }).annotate(ToolScheduling.Container, true),
     (params, toolCallId, parentExecutionId) =>
       Effect.gen(function* () {
         // A fresh child session per call, named from the parent session and the

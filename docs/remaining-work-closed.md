@@ -2958,3 +2958,42 @@ provider passes `SandboxConformance` on Windows as on POSIX.
 verify: grep "toWorkspacePath" src/sandbox/Sandbox.ts
 verify: grep "NtOpenFile" src/sandbox/Sandbox.ts
 ```
+
+## 2026-09-26 - code mode and subagents under host scheduling
+
+125. ~~**Code mode bypasses host scheduling.**~~ **DONE 2026-09-26.**
+     Found by the architecture review
+     ([plan-architecture-review.md](./plan-architecture-review.md) §1).
+     `CodeMode.invoke` ran the handler without `ToolScheduling.Current`, so
+     a tool the host serialised was not serialised when a program called
+     it.
+
+     The probe for the fix found a second, older fault: under
+     `maxConcurrent(1)`, a `Subagent.tool` call held the only permit while
+     its child's tool call waited for it, and the run hung.
+
+     Both are fixed by one idea, borrowed from `effect-agent`'s broker,
+     where nested calls get a direct call's preflight: **schedule the calls
+     that do work.**
+     - `ToolScheduling.Container` annotates a tool whose work is other tool
+       calls.
+     - `executeSettled` skips the host's `around` for a container call.
+     - `CodeMode.invoke` holds each nested handler under the host's
+       scheduling. It holds the handler, not the approval wait.
+     - `execute`, `Subagent.tool`, `toolScoped` and `Subagent.durable` are
+       containers.
+
+     `test/ToolScheduling.test.ts` covers both faults:
+     - a subagent under `maxConcurrent(1)` finishes, and only its child's
+       call is scheduled;
+     - a program's two parallel `book_room` calls never overlap under
+       `serialize`, and `execute` itself is not scheduled.
+
+     Each half was broken once, and the tests failed on it.
+
+     ```text
+     verify: grep "export const Container = Context.Reference<boolean>(Namespace.tag(\"ToolScheduling/Container\")" src/ToolScheduling.ts
+     verify: grep "scheduling.around({ name: tool.name, params: inputData.success })(drained)" src/code/CodeMode.ts
+     verify: grep "a subagent under maxConcurrent(1) finishes" test/ToolScheduling.test.ts
+     verify: grep "code mode's nested calls are scheduled like direct ones" test/ToolScheduling.test.ts
+     ```

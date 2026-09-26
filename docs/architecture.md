@@ -395,7 +395,8 @@ batch checks ── exposure: a call to an unexposed tool gets ToolNotExposedErr
      ▼
 dispatch ────── Strategy: Sequential | Parallel | Concurrency(n) | PerTool(limits, total)
      ▼
-host scheduling ToolScheduling.Current.around(call): may delay a call, never start one
+host scheduling ToolScheduling.Current.around(call): may delay a call, never start one;
+     │          skipped for a Container (execute, subagents), whose nested calls it holds instead
      ▼
 ToolCallStarted (the terminal event is guaranteed from here on, by a finalizer)
      ▼
