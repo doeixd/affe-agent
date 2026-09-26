@@ -3079,3 +3079,33 @@ verify: grep "only the recipient may reply" test/Messaging.test.ts
      verify: grep "an unknown tool outcome escalates even when classify would restart it" test/Supervisor.test.ts
      ```
 
+## 2026-09-26 - item 139: an agent as supervisor, slice 1 (plan-supervision.md §4.1)
+
+139. ~~**An agent as supervisor, slice 1.**~~ **DONE 2026-09-26.**
+     - **Consultation.** `Supervisor.run` takes `onGiveUp: ask({ control,
+       notify, timeout, grant })`, and consults an agent where it would give
+       up. `toInbox(sessionId)` is the usual `notify`.
+     - **Control.** `control()` gives the agent six tools, and the same
+       operations as effects.
+     - **Limits kept.** The budget, the unknown outcome, and intensity except
+       through `grant.restarts`. A timeout falls back to giving up.
+     - **Tasks.** They publish their session through `CurrentChild`.
+       `resubmit` keeps one session per supervisor, keyed by the
+       supervisor's scope. A fresh restart can start from the agent's note.
+     - **Context.** Every start runs in the supervisor's context, replaced
+       whole.
+     - **Record.** `Report.decisions`.
+
+     `test/SupervisorAgent.test.ts` has 14 cases, including an end-to-end
+     test with a scripted supervising agent. It was stable over 12 runs.
+     Nine rules were each broken once, and a test failed each time:
+     consultation, the unknown-outcome refusal, the allowance, changes
+     outside a decision, the supervisor's context, the note, `resubmit`'s
+     kept session, the timeout, and detaching.
+
+     ```text
+     verify: grep "export const toInbox" src/sessions/Supervisor.ts
+     verify: grep "(child) => Effect.updateContext(child, (_: Context.Context<never>) => services)" src/sessions/Supervisor.ts
+     verify: grep "an unknown tool outcome cannot be restarted by the agent either" test/SupervisorAgent.test.ts
+     ```
+

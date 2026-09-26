@@ -67,6 +67,10 @@ const classified: Record<string, { readonly class: Class; readonly why: string }
     class: "no-feature",
     why: "outside a session: nothing session-scoped is reachable"
   },
+  "src/sessions/Supervisor.ts:CurrentChild": {
+    class: "no-feature",
+    why: "outside a supervisor: a task runs as a fresh task with no one to tell"
+  },
   "src/ToolScheduling.ts:Container": {
     class: "no-feature",
     why: "a tool annotation: none means an ordinary call, which the host's scheduling holds as before"

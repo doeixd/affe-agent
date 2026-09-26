@@ -1,10 +1,15 @@
-import { Cause, Clock, Duration, Effect, Exit, Fiber, Layer, Option, Queue, Schema } from "effect"
-import { AiError } from "effect/unstable/ai"
-import type { LanguageModel, Tool } from "effect/unstable/ai"
+import { Cause, Clock, Context, Deferred, Duration, Effect, Exit, Fiber, Layer, Option, Queue, Ref, Schema, Scope, Semaphore } from "effect"
+import { AiError, Prompt, Tool } from "effect/unstable/ai"
+import type { LanguageModel } from "effect/unstable/ai"
+import { PersistedQueue } from "effect/unstable/persistence"
+import * as Agent from "../Agent.js"
 import type { AgentDefinition } from "../Agent.js"
 import * as AgentSession from "../AgentSession.js"
 import * as Budget from "../budget/Budget.js"
+import * as Namespace from "../internal/namespace.js"
 import { positiveInteger } from "../internal/positive.js"
+import * as Messaging from "./Messaging.js"
+import * as SessionInbox from "./SessionInbox.js"
 
 /**
  * OTP-style supervision, in process
@@ -42,6 +47,12 @@ import { positiveInteger } from "../internal/positive.js"
  * failure, and escalates it too by default, so a tree gives up from the leaf
  * that could not be fixed.
  *
+ * **An agent can be consulted instead** (§4.1). Given `onGiveUp: ask(...)`,
+ * the supervisor does not escalate at once. It opens a decision, tells a
+ * supervising agent through `notify`, and waits. The agent acts through
+ * `control`'s tools and ends with `resume` or `give_up`. With no decision in
+ * time, the supervisor escalates exactly as it would have.
+ *
  * `run` ends when no child is left running: each has exited, and none is due a
  * restart. A permanent child therefore keeps it running until its scope closes.
  * In process only: restart history lives in memory (§5 is the durable form).
@@ -56,6 +67,12 @@ export interface Child<E = unknown, R = never> {
   readonly id: string
   readonly run: Effect.Effect<unknown, E, R>
   readonly restart: Restart
+  /**
+   * Whether a start can take a supervisor's note (`restart_child`'s
+   * `instructions`). A fresh task can; any other child is refused one rather
+   * than having it silently dropped.
+   */
+  readonly guidance?: boolean | undefined
 }
 
 /** A child from any effect. Transient by default: restarted after an abnormal exit only. */
@@ -64,6 +81,32 @@ export const child = <E, R>(
   run: Effect.Effect<unknown, E, R>,
   options?: { readonly restart?: Restart | undefined }
 ): Child<E, R> => ({ id, run, restart: options?.restart ?? "transient" })
+
+/** What a supervisor can read of a child's session. */
+export interface SessionView {
+  readonly sessionId: string
+  readonly history: Effect.Effect<Prompt.Prompt>
+}
+
+/**
+ * What the supervisor tells one start of one child.
+ *
+ * Provided by the supervisor to each start; `None` outside one, where a task
+ * behaves as a fresh task with no supervisor to tell.
+ */
+export interface ChildContext {
+  readonly id: string
+  /** The supervisor's scope. A `resubmit` task keeps its session in it. */
+  readonly scope: Scope.Scope
+  /** A note for this start, from `restart_child`. */
+  readonly guidance: Option.Option<string>
+  /** Tell the supervisor which session this start is running, for `inspect_child`. */
+  readonly publish: (view: SessionView) => Effect.Effect<void>
+}
+
+export const CurrentChild = Context.Reference<Option.Option<ChildContext>>(Namespace.tag("sessions/CurrentChild"), {
+  defaultValue: () => Option.none()
+})
 
 /** A task's submission was interrupted by something other than its supervisor. */
 export class TaskInterruptedError extends Schema.TaggedError<TaskInterruptedError>()("TaskInterruptedError", {
@@ -75,11 +118,18 @@ export class TaskInterruptedError extends Schema.TaggedError<TaskInterruptedErro
 }
 
 /**
- * A child that runs `agent` on `prompt`, in a fresh session each time it starts.
+ * A child that runs `agent` on `prompt`.
  *
- * A restart is a new session asked the same thing: OTP's restart, which
- * starts from the initial state. A completed submission is a normal exit, and
- * a failed or interrupted one is abnormal.
+ * - **`fresh`** (the default): a new session each start, which is OTP's
+ *   restart, from the initial state. A supervisor's note, when
+ *   `restart_child` gives one, is seeded into the new session after the
+ *   agent's own instructions.
+ * - **`resubmit`**: one session for the life of the supervisor, asked again
+ *   on each start, so a retry sees the failed attempt in its history. It
+ *   takes no note; steering it is item 140.
+ *
+ * A completed submission is a normal exit, and a failed or interrupted one is
+ * abnormal.
  */
 export const task = <
   Tools extends Record<string, Tool.Any>,
@@ -96,26 +146,68 @@ export const task = <
     /** The child's world: its model and whatever its tools need. */
     readonly provide: Layer.Layer<LanguageModel.LanguageModel | R, LE>
     readonly restart?: Restart | undefined
+    readonly mode?: "fresh" | "resubmit" | undefined
   }
-): Child<AgentSession.PromptError<Tools, E> | TaskInterruptedError | LE, never> =>
-  child(
+): Child<AgentSession.PromptError<Tools, E> | TaskInterruptedError | LE, never> => {
+  const mode = options.mode ?? "fresh"
+  // One kept session per supervisor, keyed by its scope: a task value reused
+  // by two supervisors must not hand one's session to the other.
+  const kept = new WeakMap<Scope.Scope, AgentSession.AgentSession<Tools, E, Value, Input>>()
+
+  const ask = (session: AgentSession.AgentSession<Tools, E, Value, Input>, context: Option.Option<ChildContext>) =>
+    Effect.gen(function*() {
+      if (Option.isSome(context)) {
+        yield* context.value.publish({ sessionId: session.id, history: AgentSession.history(session) })
+      }
+      // Explicit type arguments: a generic `Input` is not inferred through
+      // `Effect.fn`'s wrapper when it is the caller's own type parameter.
+      const result = yield* AgentSession.prompt<Tools, E, Value, Input>(session, options.prompt)
+      if (result.status === "interrupted") return yield* new TaskInterruptedError({ child: id })
+      return result
+    })
+
+  const body = Effect.gen(function*() {
+    const context = yield* CurrentChild
+    if (mode === "resubmit" && Option.isSome(context)) {
+      const existing = kept.get(context.value.scope)
+      const session = existing ?? (yield* AgentSession.make(agent).pipe(Scope.provide(context.value.scope)))
+      kept.set(context.value.scope, session)
+      return yield* ask(session, context)
+    }
+    const note = Option.flatMap(context, (current) => current.guidance)
+    return yield* Effect.scoped(Effect.gen(function*() {
+      const session = yield* AgentSession.make(
+        agent,
+        Option.match(note, {
+          onNone: () => ({}),
+          // The agent's instructions first, as they would be without a
+          // history, then the supervisor's note.
+          onSome: (text) => ({
+            history: Prompt.fromMessages([
+              ...Option.match(agent.instructions, {
+                onNone: () => [],
+                onSome: (content) => [Prompt.systemMessage({ content })]
+              }),
+              Prompt.systemMessage({ content: `A note from your supervisor, for this attempt: ${text}` })
+            ])
+          })
+        })
+      )
+      return yield* ask(session, context)
+    }))
+  })
+
+  return {
     id,
-    Effect.scoped(
-      Effect.gen(function*() {
-        const session = yield* AgentSession.make(agent)
-        // Explicit type arguments: a generic `Input` is not inferred through
-        // `Effect.fn`'s wrapper when it is the caller's own type parameter.
-        const result = yield* AgentSession.prompt<Tools, E, Value, Input>(session, options.prompt)
-        if (result.status === "interrupted") return yield* new TaskInterruptedError({ child: id })
-        return result
-      })
-    ).pipe((body) =>
+    restart: options.restart ?? "transient",
+    guidance: mode === "fresh",
+    run: body.pipe((run) =>
       // The budget in context, which is the supervisor's when it caps its
       // children, or a fresh one: provided innermost, a fresh budget would
       // shadow the supervisor's and it would never see what a task spent.
       Effect.flatMap(Effect.serviceOption(Budget.Budget), (ambient) =>
         Effect.provide(
-          body,
+          run,
           Layer.merge(
             options.provide,
             Option.match(ambient, {
@@ -124,9 +216,184 @@ export const task = <
             })
           )
         ))
-    ),
-    { restart: options.restart }
-  )
+    )
+  }
+}
+
+// ---------------------------------------------------------------------------
+// An agent as supervisor (§4.1)
+
+/** How a consultation ended. */
+export type Outcome = "resumed" | "gave-up" | "timed-out"
+
+/** One consultation, as `Report.decisions` records it. */
+export interface Decision {
+  readonly child: string
+  readonly reason: SupervisorEscalatedError["reason"]
+  /** What the agent did, in order: `restart a`, `stop b`. */
+  readonly actions: ReadonlyArray<string>
+  readonly outcome: Outcome
+  /** The agent's note (`resume`) or reason (`give_up`). */
+  readonly note: Option.Option<string>
+}
+
+/** What a running supervisor lets its control do. Internal: the tools call it. */
+interface Attached {
+  readonly name: string
+  readonly list: Effect.Effect<string>
+  readonly inspect: (id: string) => Effect.Effect<string, string>
+  readonly restart: (id: string, instructions: Option.Option<string>) => Effect.Effect<string, string>
+  readonly stop: (id: string) => Effect.Effect<string, string>
+  readonly decide: (
+    decision: { readonly _tag: "resume" | "give_up"; readonly note: Option.Option<string> }
+  ) => Effect.Effect<string, string>
+}
+
+const noSupervisor = "no supervisor is attached to this control; there is nothing to act on"
+
+const listDefinition = (prefix: string) =>
+  Tool.make(`${prefix}list_children`, {
+    description: "List the supervised children: status, starts, and last failure.",
+    parameters: Schema.Struct({}),
+    success: Schema.String,
+    failure: Schema.String
+  }).annotate(Tool.Readonly, true)
+
+const inspectDefinition = (prefix: string) =>
+  Tool.make(`${prefix}inspect_child`, {
+    description: "Read one child's status and, for an agent task, the end of its latest session.",
+    parameters: Schema.Struct({ id: Schema.String }),
+    success: Schema.String,
+    failure: Schema.String
+  }).annotate(Tool.Readonly, true)
+
+const restartDefinition = (prefix: string) =>
+  Tool.make(`${prefix}restart_child`, {
+    description:
+      "Start a child again. `instructions` is a note its fresh session starts with. Counts toward the restart limit and the budget.",
+    parameters: Schema.Struct({ id: Schema.String, instructions: Schema.optional(Schema.String) }),
+    success: Schema.String,
+    failure: Schema.String
+  })
+
+const stopDefinition = (prefix: string) =>
+  Tool.make(`${prefix}stop_child`, {
+    description: "Stop a running child. It is not restarted.",
+    parameters: Schema.Struct({ id: Schema.String }),
+    success: Schema.String,
+    failure: Schema.String
+  })
+
+const resumeDefinition = (prefix: string) =>
+  Tool.make(`${prefix}resume`, {
+    description: "End the decision: the supervisor carries on with the children as they now are.",
+    parameters: Schema.Struct({ note: Schema.optional(Schema.String) }),
+    success: Schema.String,
+    failure: Schema.String
+  })
+
+const giveUpDefinition = (prefix: string) =>
+  Tool.make(`${prefix}give_up`, {
+    description: "End the decision: the supervisor stops its children and escalates, with your reason.",
+    parameters: Schema.Struct({ reason: Schema.String }),
+    success: Schema.String,
+    failure: Schema.String
+  })
+
+/**
+ * What decides for a supervisor: the tools a supervising agent acts
+ * through, and the same operations as plain effects, for an operator or a
+ * UI to decide with instead. Bound to one supervisor.
+ *
+ * Make one, build the agent with `control.tools`, and give the supervisor
+ * `ask({ control, ... })`: `run` attaches to the control while it runs. The
+ * operations that change anything act only while the supervisor is waiting
+ * for a decision; at any other time they say so. Every operation fails with
+ * a sentence, which is what a tool returns to its model.
+ */
+export const control = Effect.fn("Supervisor.control")(function*(options?: {
+  /** Prefixes every tool name, for an agent that supervises more than one. */
+  readonly prefix?: string | undefined
+}) {
+  const prefix = options?.prefix ?? ""
+  const attached = yield* Ref.make(Option.none<Attached>())
+  const on = <A>(use: (supervisor: Attached) => Effect.Effect<A, string>) =>
+    Effect.flatMap(Ref.get(attached), Option.match({ onNone: () => Effect.fail(noSupervisor), onSome: use }))
+  const list = on((supervisor) => supervisor.list)
+  const inspect = (id: string) => on((supervisor) => supervisor.inspect(id))
+  const restart = (id: string, instructions?: string) =>
+    on((supervisor) => supervisor.restart(id, Option.fromNullishOr(instructions)))
+  const stop = (id: string) => on((supervisor) => supervisor.stop(id))
+  const resume = (note?: string) =>
+    on((supervisor) => supervisor.decide({ _tag: "resume", note: Option.fromNullishOr(note) }))
+  const giveUp = (reason: string) => on((supervisor) => supervisor.decide({ _tag: "give_up", note: Option.some(reason) }))
+  const tools = [
+    Agent.tool(listDefinition(prefix), () => list),
+    Agent.tool(inspectDefinition(prefix), ({ id }) => inspect(id)),
+    Agent.tool(restartDefinition(prefix), ({ id, instructions }) => restart(id, instructions)),
+    Agent.tool(stopDefinition(prefix), ({ id }) => stop(id)),
+    Agent.tool(resumeDefinition(prefix), ({ note }) => resume(note)),
+    Agent.tool(giveUpDefinition(prefix), ({ reason }) => giveUp(reason))
+  ] as const
+  return {
+    tools,
+    list,
+    inspect,
+    restart,
+    stop,
+    resume,
+    giveUp,
+    /** Which supervisor is attached. `run` sets it; nothing else should. */
+    attached
+  }
+})
+
+export type Control = Effect.Success<ReturnType<typeof control>>
+
+/** A supervisor that consults an agent where it would give up. */
+export interface Ask {
+  readonly control: Control
+  /** Tell the supervising agent a decision is waiting. See `toInbox`. */
+  readonly notify: (message: string) => Effect.Effect<void>
+  /** How long to wait for `resume` or `give_up` before giving up anyway. */
+  readonly timeout: Duration.Input
+  /** Restarts the agent may make beyond the intensity limit, over the supervisor's life. Default 0. */
+  readonly grant?: { readonly restarts: number } | undefined
+}
+
+/** `onGiveUp`'s value. */
+export const ask = (options: Ask): Ask => options
+
+/**
+ * A `notify` that puts the message into `sessionId`'s inbox, as a framework
+ * system message on `Messaging`'s queue, so the loop that delivers messages
+ * delivers it when the agent is idle.
+ */
+export const toInbox = Effect.fn("Supervisor.toInbox")(function*(
+  sessionId: string,
+  options?: { readonly name?: string | undefined }
+) {
+  const queue = yield* PersistedQueue.make({ name: options?.name ?? Messaging.defaultName, schema: SessionInbox.Item })
+  return (message: string): Effect.Effect<void> =>
+    Effect.gen(function*() {
+      // One item per consultation: a fresh id, because each is a new request.
+      const id = `supervisor:${globalThis.crypto.randomUUID()}`
+      yield* queue.offer({
+        id,
+        sessionId,
+        kind: "framework",
+        input: Prompt.fromMessages([Prompt.systemMessage({ content: message })]),
+        source: { kind: "supervisor" },
+        createdAt: yield* Clock.currentTimeMillis
+      }, { id })
+    }).pipe(
+      // A notice that cannot be queued is the timeout's to handle: the
+      // supervisor gives up as it would have, rather than failing here.
+      Effect.catchCause((cause) => Effect.logWarning("Supervisor.toInbox: the decision notice was not queued", cause))
+    )
+})
+
+// ---------------------------------------------------------------------------
 
 export interface Spec<Children extends ReadonlyArray<Child<any, any>>> {
   /** Names the supervisor in its escalation and its spans. */
@@ -145,6 +412,8 @@ export interface Spec<Children extends ReadonlyArray<Child<any, any>>> {
   readonly maxTokens?: number | undefined
   /** Whether an abnormal exit is restarted. See the module notes for the default. */
   readonly classify?: ((cause: Cause.Cause<unknown>) => "restart" | "escalate") | undefined
+  /** Consult an agent where the supervisor would give up (§4.1). */
+  readonly onGiveUp?: Ask | undefined
   readonly children: Children
 }
 
@@ -179,6 +448,8 @@ export class SupervisorEscalatedError extends Schema.TaggedError<SupervisorEscal
 export interface Report {
   /** Each child, in order, with how many times it was started. */
   readonly children: ReadonlyArray<{ readonly id: string; readonly starts: number }>
+  /** Each consultation of the supervising agent, in order. */
+  readonly decisions: ReadonlyArray<Decision>
 }
 
 /** Restart an `AiError` its provider marks retryable; escalate everything else. */
@@ -214,18 +485,60 @@ const describe = (cause: Cause.Cause<unknown>): string => {
   return "interrupted"
 }
 
+/** How much of a child's session `inspect_child` shows. */
+const inspectMessages = 6
+const inspectCharacters = 4_000
+
+const renderHistory = (prompt: Prompt.Prompt): string => {
+  const text = prompt.content.slice(-inspectMessages).map((message) => {
+    const content = typeof message.content === "string"
+      ? message.content
+      : message.content.map((part) => (part.type === "text" ? part.text : `[${part.type}]`)).join(" ")
+    return `${message.role}: ${content}`
+  }).join("\n")
+  return text.length > inspectCharacters ? `…${text.slice(-inspectCharacters)}` : text
+}
+
 interface Exited {
   readonly id: string
   readonly generation: number
   readonly exit: Exit.Exit<unknown, unknown>
 }
 
+type Status = "running" | "exited" | "failed" | "stopped"
+
+interface ChildState {
+  status: Status
+  starts: number
+  last: Option.Option<string>
+  unknownOutcome: boolean
+  guidance: Option.Option<string>
+  view: Option.Option<SessionView>
+}
+
+/** What the main loop does after one exit. */
+type Step =
+  | { readonly _tag: "Continue" }
+  | {
+    readonly _tag: "GiveUp"
+    readonly child: string
+    readonly reason: SupervisorEscalatedError["reason"]
+    readonly detail: string
+  }
+
+const reasonText: Record<SupervisorEscalatedError["reason"], string> = {
+  failure: "failed in a way its classifier would not restart",
+  unresolved: "left a tool outcome unknown; it cannot be restarted",
+  intensity: "exceeded the restart intensity",
+  budget: "would restart after the children spent their token budget"
+}
+
 /**
  * Run `spec`'s children under its policy until none is left running.
  *
  * Fails with `SupervisorEscalatedError` when a failure is not to be
- * restarted, or when intensity or the budget runs out. Interrupting `run`
- * interrupts every child.
+ * restarted, or when intensity or the budget runs out, unless `onGiveUp`'s
+ * agent resumes it. Interrupting `run` interrupts every child.
  */
 export const run = Effect.fn("Supervisor.run")(function*<const Children extends ReadonlyArray<Child<any, any>>>(
   spec: Spec<Children>
@@ -242,6 +555,11 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
   const classify = spec.classify ?? defaultClassify
   if (spec.maxTokens !== undefined && !(Number.isFinite(spec.maxTokens) && spec.maxTokens >= 0)) {
     return yield* Effect.die(new RangeError(`Supervisor ${spec.name}: maxTokens must be a finite, non-negative number`))
+  }
+  const consult = spec.onGiveUp
+  const grantRestarts = consult?.grant?.restarts ?? 0
+  if (!Number.isSafeInteger(grantRestarts) || grantRestarts < 0) {
+    return yield* Effect.die(new RangeError(`Supervisor ${spec.name}: grant.restarts must be a non-negative integer`))
   }
 
   // The children's budget, when the spec caps them. It counts their turns
@@ -270,25 +588,61 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
 
   return yield* Effect.scoped(Effect.gen(function*() {
     const scope = yield* Effect.scope
+    // The supervisor's own context, which every start runs in, replaced
+    // whole: a restart the agent asks for is started from the agent's tool
+    // fibre, and must see the supervisor's services, not the agent's.
+    // Typed `any` for the reason the final assertion below gives: the
+    // children's bodies require `any`, and a context is invariant.
+    const services = yield* Effect.context<any>()
     const exits = yield* Queue.unbounded<Exited>()
+    // One permit: the main loop and the agent's tools both change the
+    // children, and each change must see the state the last one left.
+    const lock = yield* Semaphore.make(1)
     const running = new Map<string, { readonly fiber: Fiber.Fiber<void>; readonly generation: number }>()
     const generations = new Map<string, number>()
-    const starts = new Map<string, number>()
+    const states = new Map<string, ChildState>(spec.children.map((entry) => [entry.id, {
+      status: "exited",
+      starts: 0,
+      last: Option.none(),
+      unknownOutcome: false,
+      guidance: Option.none(),
+      view: Option.none()
+    }]))
+    const stateOf = (id: string): ChildState => states.get(id)!
+    const decisions: Array<Decision> = []
     let restarts: ReadonlyArray<number> = []
+    let grantLeft = grantRestarts
+    let pending = Option.none<{
+      readonly child: string
+      readonly deferred: Deferred.Deferred<{ readonly _tag: "resume" | "give_up"; readonly note: Option.Option<string> }>
+      readonly actions: Array<string>
+    }>()
 
     const start = (entry: Child<any, any>) =>
       Effect.gen(function*() {
         const generation = (generations.get(entry.id) ?? 0) + 1
         generations.set(entry.id, generation)
-        starts.set(entry.id, (starts.get(entry.id) ?? 0) + 1)
+        const state = stateOf(entry.id)
+        state.starts += 1
+        state.status = "running"
+        const guidance = state.guidance
+        state.guidance = Option.none()
+        const context: ChildContext = {
+          id: entry.id,
+          scope,
+          guidance,
+          publish: (view) => Effect.sync(() => void (stateOf(entry.id).view = Option.some(view)))
+        }
+        const provided = Effect.provideService(entry.run, CurrentChild, Option.some(context))
         const body = Option.match(budget, {
-          onNone: () => entry.run,
-          onSome: ({ provided }) => Effect.provideService(entry.run, Budget.Budget, provided)
+          onNone: () => provided,
+          onSome: (service) => Effect.provideService(provided, Budget.Budget, service.provided)
         })
         const fiber = yield* body.pipe(
           Effect.exit,
           Effect.flatMap((exit) => Queue.offer(exits, { id: entry.id, generation, exit })),
           Effect.asVoid,
+          (child) => Effect.updateContext(child, (_: Context.Context<never>) => services),
           Effect.forkIn(scope)
         )
         running.set(entry.id, { fiber, generation })
@@ -301,6 +655,7 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
         if (entry === undefined) return
         generations.set(id, entry.generation + 1)
         running.delete(id)
+        stateOf(id).status = "stopped"
         yield* Fiber.interrupt(entry.fiber)
       })
 
@@ -311,64 +666,220 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
 
     const escalate = (id: string, reason: SupervisorEscalatedError["reason"], detail: string) =>
       Effect.andThen(
-        stopAll,
+        lock.withPermits(1)(stopAll),
         Effect.fail(new SupervisorEscalatedError({ supervisor: spec.name, child: id, reason, detail }))
       )
 
-    for (const entry of spec.children) yield* start(entry)
-
-    while (running.size > 0) {
-      const exited = yield* Queue.take(exits)
-      // An exit from a child the supervisor itself stopped, or from an
-      // earlier start of a child already restarted: not news.
-      if (generations.get(exited.id) !== exited.generation) continue
-      running.delete(exited.id)
-      const index = spec.children.findIndex((entry) => entry.id === exited.id)
-      const entry = spec.children[index]!
-      // Before the restart type: an unknown side effect needs someone told,
-      // even from a temporary child that would not be restarted anyway.
-      if (Exit.isFailure(exited.exit) && unresolved(exited.exit.cause)) {
-        return yield* escalate(entry.id, "unresolved", describe(exited.exit.cause))
-      }
-      const normal = Exit.isSuccess(exited.exit)
-      const due = entry.restart === "permanent" || (entry.restart === "transient" && !normal)
-      if (!due) continue
-
-      if (Exit.isFailure(exited.exit) && classify(exited.exit.cause) === "escalate") {
-        return yield* escalate(entry.id, "failure", describe(exited.exit.cause))
-      }
-
+    /** Whether one more restart fits: the window, then the allowance, then the budget. */
+    const admitRestart = Effect.gen(function*() {
       const now = yield* Clock.currentTimeMillis
       restarts = restarts.filter((at) => at > now - window)
       if (restarts.length >= maxRestarts) {
-        return yield* escalate(entry.id, "intensity", `${restarts.length} restarts within ${window}ms`)
+        return Option.some<SupervisorEscalatedError["reason"]>("intensity")
       }
       if (Option.isSome(budget) && spec.maxTokens !== undefined) {
         // The children's own spend, not the ambient total they read.
-        const spent = yield* budget.value.own.spent
-        if (spent >= spec.maxTokens) {
-          return yield* escalate(entry.id, "budget", `${spent} of ${spec.maxTokens} tokens spent`)
-        }
+        if ((yield* budget.value.own.spent) >= spec.maxTokens) return Option.some<SupervisorEscalatedError["reason"]>("budget")
       }
       restarts = [...restarts, now]
-      yield* Effect.annotateCurrentSpan({ "supervisor.restarted": entry.id })
+      return Option.none<SupervisorEscalatedError["reason"]>()
+    })
 
-      // Who restarts with it: nobody, everyone running, or everyone after it.
-      const siblings = strategy === "one_for_one"
-        ? []
-        : spec.children.filter((other, position) =>
-          other.id !== entry.id && running.has(other.id) && (strategy === "one_for_all" || position > index)
-        )
-      for (const other of [...siblings].reverse()) yield* stop(other.id)
-      for (const other of spec.children) {
-        if (other.id === entry.id || siblings.some((sibling) => sibling.id === other.id && other.restart !== "temporary")) {
-          yield* start(other)
+    const summary = (id: string): string => {
+      const state = stateOf(id)
+      const last = Option.match(state.last, { onNone: () => "", onSome: (text) => `; last failure: ${text}` })
+      const unknown = state.unknownOutcome ? "; its tool outcome is unknown" : ""
+      return `${id}: ${state.status}, ${state.starts} start(s)${last}${unknown}`
+    }
+
+    const find = (id: string): Effect.Effect<Child<any, any>, string> => {
+      const entry = spec.children.find((candidate) => candidate.id === id)
+      return entry === undefined
+        ? Effect.fail(`${id} is not a child of supervisor ${spec.name}; list_children names them`)
+        : Effect.succeed(entry)
+    }
+
+    /** A change the agent asks for: only while a decision is pending, and under the lock. */
+    const change = <A>(label: (a: A) => string, act: Effect.Effect<A, string>) =>
+      lock.withPermits(1)(Effect.gen(function*() {
+        if (Option.isNone(pending)) {
+          return yield* Effect.fail(
+            `supervisor ${spec.name} is not waiting for a decision; it is handling its children itself`
+          )
         }
+        const done = yield* act
+        pending.value.actions.push(label(done))
+        return done
+      }))
+
+    const attached: Attached = {
+      name: spec.name,
+      list: lock.withPermits(1)(Effect.gen(function*() {
+        const spent = Option.isSome(budget)
+          ? `\nSpent: ${yield* budget.value.own.spent} of ${spec.maxTokens} tokens.`
+          : ""
+        return `${spec.children.map((entry) => summary(entry.id)).join("\n")}${spent}`
+      })),
+      inspect: (id) =>
+        Effect.gen(function*() {
+          yield* find(id)
+          const view = stateOf(id).view
+          const history = Option.isSome(view) ? `\nSession ${view.value.sessionId}:\n${renderHistory(yield* view.value.history)}` : ""
+          return `${summary(id)}${history}`
+        }),
+      restart: (id, instructions) =>
+        change((text: string) => text, Effect.gen(function*() {
+          const entry = yield* find(id)
+          const state = stateOf(id)
+          if (state.unknownOutcome) {
+            return yield* Effect.fail(`${id} left a tool outcome unknown; restarting it could repeat that side effect`)
+          }
+          if (Option.isSome(instructions) && entry.guidance !== true) {
+            return yield* Effect.fail(`${id} takes no instructions; restart it without them`)
+          }
+          const refused = yield* admitRestart
+          if (Option.isSome(refused)) {
+            if (refused.value === "budget" || grantLeft === 0) {
+              return yield* Effect.fail(
+                refused.value === "budget"
+                  ? `the children have spent their token budget; ${id} cannot be restarted`
+                  : `the restart limit is reached and no allowance is left; ${id} cannot be restarted`
+              )
+            }
+            grantLeft -= 1
+          }
+          yield* stop(id)
+          state.guidance = instructions
+          yield* start(entry)
+          return `restart ${id}`
+        })),
+      stop: (id) =>
+        change((text: string) => text, Effect.gen(function*() {
+          yield* find(id)
+          if (!running.has(id)) return yield* Effect.fail(`${id} is not running`)
+          yield* stop(id)
+          return `stop ${id}`
+        })),
+      decide: (decision) =>
+        lock.withPermits(1)(Effect.gen(function*() {
+          if (Option.isNone(pending)) {
+            return yield* Effect.fail(`supervisor ${spec.name} is not waiting for a decision`)
+          }
+          yield* Deferred.succeed(pending.value.deferred, decision)
+          return decision._tag === "resume" ? "The supervisor carries on." : "The supervisor gives up."
+        }))
+    }
+
+    if (consult !== undefined) {
+      const claimed = yield* Ref.modify(consult.control.attached, (current) =>
+        Option.isSome(current) ? [false, current] as const : [true, Option.some(attached)] as const)
+      if (!claimed) {
+        return yield* Effect.die(new RangeError(`Supervisor ${spec.name}: its control is already attached to a running supervisor`))
       }
+      yield* Effect.addFinalizer(() => Ref.set(consult.control.attached, Option.none()))
+    }
+
+    /**
+     * Where the supervisor would give up: ask the agent, when there is one.
+     * Runs outside the lock, so the agent's tools can take it.
+     */
+    const giveUp = (step: Extract<Step, { readonly _tag: "GiveUp" }>) =>
+      Effect.gen(function*() {
+        if (consult === undefined) return yield* escalate(step.child, step.reason, step.detail)
+        const deferred = yield* Deferred.make<{ readonly _tag: "resume" | "give_up"; readonly note: Option.Option<string> }>()
+        const actions: Array<string> = []
+        yield* lock.withPermits(1)(Effect.sync(() => void (pending = Option.some({ child: step.child, deferred, actions }))))
+        const timeout = Duration.fromInputUnsafe(consult.timeout)
+        const situation = [
+          `Supervisor ${spec.name} needs a decision.`,
+          `Child ${step.child} ${reasonText[step.reason]}: ${step.detail}.`,
+          "Children:",
+          ...spec.children.map((entry) => `- ${summary(entry.id)}`),
+          "Use list_children and inspect_child to look, and restart_child or stop_child to act.",
+          "Then call resume to let the supervisor carry on, or give_up to let it escalate.",
+          `Without a decision within ${Duration.format(timeout)}, it gives up.`
+        ].join("\n")
+        yield* consult.notify(situation)
+        const decided = yield* Deferred.await(deferred).pipe(Effect.timeoutOption(timeout))
+        yield* lock.withPermits(1)(Effect.sync(() => void (pending = Option.none())))
+        const outcome: Outcome = Option.match(decided, {
+          onNone: () => "timed-out",
+          onSome: (decision) => decision._tag === "resume" ? "resumed" : "gave-up"
+        })
+        const note = Option.flatMap(decided, (decision) => decision.note)
+        decisions.push({ child: step.child, reason: step.reason, actions, outcome, note })
+        yield* Effect.annotateCurrentSpan({ "supervisor.decision": outcome })
+        if (outcome === "resumed") return
+        const why = outcome === "timed-out"
+          ? `the supervising agent did not decide within ${Duration.format(timeout)}`
+          : `the supervising agent gave up: ${Option.getOrElse(note, () => "")}`
+        return yield* escalate(step.child, step.reason, `${step.detail}; ${why}`)
+      })
+
+    /** One exit, under the lock: what to do about it. */
+    const handle = (exited: Exited) =>
+      Effect.gen(function*(): Generator<any, Step, any> {
+        // An exit from a child the supervisor itself stopped, or from an
+        // earlier start of a child already restarted: not news.
+        if (generations.get(exited.id) !== exited.generation) return { _tag: "Continue" }
+        running.delete(exited.id)
+        const index = spec.children.findIndex((entry) => entry.id === exited.id)
+        const entry = spec.children[index]!
+        const state = stateOf(entry.id)
+        if (Exit.isSuccess(exited.exit)) {
+          state.status = "exited"
+        } else {
+          state.status = "failed"
+          state.last = Option.some(describe(exited.exit.cause))
+        }
+        // Before the restart type: an unknown side effect needs someone told,
+        // even from a temporary child that would not be restarted anyway.
+        if (Exit.isFailure(exited.exit) && unresolved(exited.exit.cause)) {
+          state.unknownOutcome = true
+          return { _tag: "GiveUp", child: entry.id, reason: "unresolved", detail: describe(exited.exit.cause) }
+        }
+        const normal = Exit.isSuccess(exited.exit)
+        const due = entry.restart === "permanent" || (entry.restart === "transient" && !normal)
+        if (!due) return { _tag: "Continue" }
+
+        if (Exit.isFailure(exited.exit) && classify(exited.exit.cause) === "escalate") {
+          return { _tag: "GiveUp", child: entry.id, reason: "failure", detail: describe(exited.exit.cause) }
+        }
+        const refused = yield* admitRestart
+        if (Option.isSome(refused)) {
+          const detail = refused.value === "intensity"
+            ? `${restarts.length} restarts within ${window}ms`
+            : `${Option.isSome(budget) ? yield* budget.value.own.spent : 0} of ${spec.maxTokens} tokens spent`
+          return { _tag: "GiveUp", child: entry.id, reason: refused.value, detail }
+        }
+        yield* Effect.annotateCurrentSpan({ "supervisor.restarted": entry.id })
+
+        // Who restarts with it: nobody, everyone running, or everyone after it.
+        const siblings = strategy === "one_for_one"
+          ? []
+          : spec.children.filter((other, position) =>
+            other.id !== entry.id && running.has(other.id) && (strategy === "one_for_all" || position > index)
+          )
+        for (const other of [...siblings].reverse()) yield* stop(other.id)
+        for (const other of spec.children) {
+          if (other.id === entry.id || siblings.some((sibling) => sibling.id === other.id && other.restart !== "temporary")) {
+            yield* start(other)
+          }
+        }
+        return { _tag: "Continue" }
+      })
+
+    yield* lock.withPermits(1)(Effect.forEach(spec.children, start, { discard: true }))
+
+    while (running.size > 0) {
+      const exited = yield* Queue.take(exits)
+      const step = yield* lock.withPermits(1)(handle(exited))
+      if (step._tag === "GiveUp") yield* giveUp(step)
     }
 
     const report: Report = {
-      children: spec.children.map((entry) => ({ id: entry.id, starts: starts.get(entry.id) ?? 0 }))
+      children: spec.children.map((entry) => ({ id: entry.id, starts: stateOf(entry.id).starts })),
+      decisions
     }
     return report
     // A plain `as`, and the only one here. The children are typed

@@ -178,7 +178,8 @@ below, and judgement is applied where the policy gives up.
 
 ## 4.1 An agent as supervisor
 
-Status: **slice 1 in progress** (item 139), and **slice 2 open** (item 140).
+Status: **slice 1 built, 2026-09-26** (item 139). **Slice 2 is open**
+(item 140).
 
 **The shape.** The deterministic supervisor handles what a rule can:
 restarting a provider hiccup, and giving up after too many restarts. Where
@@ -255,6 +256,15 @@ a context reference the supervisor provides to each start.
 - Instructions seed a *fresh* restart's session: the agent's instructions,
   then the supervisor's note, as system messages. A `resubmit` session
   already holds its history and takes guidance by steering, in slice 2.
+
+**As built, two refinements.**
+- **`control` exposes its operations as plain effects**, beside the tools:
+  `list`, `inspect`, `restart`, `stop`, `resume` and `giveUp`. An operator or
+  a UI can decide through the same limits, and the tests do.
+- **Every start runs in the supervisor's own captured context, replaced
+  whole.** A restart the agent asks for is started from the agent's tool
+  fibre, which has none of the supervisor's services, and whose references
+  must not leak into the child.
 
 **The record.** `Report.decisions` lists each consultation: the child, the
 reason, what the agent did, and how it ended (`resumed`, `gave-up` or

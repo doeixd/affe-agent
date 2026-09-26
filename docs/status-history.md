@@ -6559,3 +6559,25 @@ Each is fixed, with a test that failed first.
   now read the ambient totals, as a delegated child does, while `maxTokens`
   counts only the children's own spend. That second half has its own test.
 
+## 2026-09-26 - an agent as supervisor
+
+Plan-supervision §4.1, slice 1 (item 139). Where a supervisor would give up,
+it can now consult an agent:
+- the agent acts through six tools bound to that one supervisor;
+- it ends with `resume` or `give_up`;
+- a timeout falls back to giving up, so a broken supervising agent cannot
+  stall the tree.
+
+Three limits survive the conversation: the budget, an unknown tool outcome,
+and the restart limit, which the agent can pass only through an explicit
+allowance.
+
+Tasks can be `resubmit` (one session per supervisor), and a fresh restart can
+start from the agent's note.
+
+Typing it found a real fault before any test ran. A restart the agent asks
+for is started from the agent's tool fibre, so the child would have run
+with the agent's context rather than the supervisor's. Every start now runs
+in the supervisor's captured context, replaced whole, and a test with a
+supervisor-only service pins it.
+

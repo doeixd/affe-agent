@@ -210,9 +210,69 @@ supervisor checks, in order:
 - A parent supervisor classifies that like any other failure, and escalates
   it by default.
 
-**Limits.** In process only, with restart history in memory. Only `fresh`
-restarts exist; `resubmit` and `rewind` are specified in
-`plan-supervision.md` §4. Escalation into an agent's inbox is not built.
+**Task modes.**
+- A task is `fresh` by default: a new session each start.
+- `mode: "resubmit"` keeps one session for the supervisor's life and asks it
+  again, so a retry sees the failed attempt in its history.
+
+**Limits.** In process only, with restart history in memory. `rewind` is
+specified in `plan-supervision.md` §4, not built.
+
+### An agent as supervisor
+
+Given `onGiveUp`, a supervisor does not escalate at once where it would give
+up. It consults an agent:
+
+```ts
+const control = yield* Supervisor.control()
+const Lead = Agent.make({ instructions: "You run the research team.", tools: control.tools })
+// ...the lead's session, and a delivery loop for its inbox
+
+yield* Supervisor.run({
+  name: "research",
+  children: [...],
+  onGiveUp: Supervisor.ask({
+    control,
+    notify: yield* Supervisor.toInbox("lead"),
+    timeout: "5 minutes",
+    grant: { restarts: 2 }
+  })
+})
+```
+
+**A consultation, step by step:**
+1. The supervisor opens a decision, and the children still running keep
+   running.
+2. `notify` tells the agent what happened. `toInbox` puts a framework system
+   message on `Messaging`'s queue.
+3. The agent looks with `list_children` and `inspect_child`. `inspect_child`
+   shows the tail of a task's latest session.
+4. It acts with `restart_child(id, instructions?)` and `stop_child(id)`.
+5. It ends with `resume(note?)`, and the supervisor carries on, or with
+   `give_up(reason)`, and it escalates with that reason.
+6. With no decision within `timeout`, the supervisor gives up as it would
+   have. An agent that fails, or never answers, cannot stall the tree.
+
+**Limits the agent cannot remove:**
+- **The budget.** `maxTokens` is never exceeded.
+- **The restart limit**, except through `grant.restarts` (default 0),
+  counted over the supervisor's life.
+- **An unknown outcome.** A child whose tool outcome is unknown cannot be
+  restarted at all.
+- **Instructions** are refused for a child that cannot take them: every
+  child except a `fresh` task.
+
+**When the tools act.** The tools that change anything act only while a
+decision is pending. `control`'s operations (`list`, `inspect`, `restart`,
+`stop`, `resume`, `giveUp`) are the same thing as plain effects, for an
+operator or a UI to decide with.
+
+**Where restarts run.** Every start runs in the supervisor's own context, so
+a restart asked for from an agent's tool call sees the supervisor's
+services, not the agent's.
+
+**The record.** `Report.decisions` records each consultation: the child, the
+reason, the actions taken, the outcome and the note.
 
 ## Scheduling & self-dispatch
 

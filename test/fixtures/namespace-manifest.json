@@ -12,6 +12,7 @@
   "affe-agent/RunId",
   "affe-agent/RunLedger",
   "affe-agent/SessionId",
+  "affe-agent/sessions/CurrentChild",
   "affe-agent/sessions/messages",
   "affe-agent/sessions/Messaging",
   "affe-agent/SubmissionId",
