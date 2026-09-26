@@ -129,6 +129,32 @@ only a `PersistedQueue` store. `deliverer` is built where the `AgentClient`
 exists, as `Subagent.background`'s reports are, because the client serves the
 agent whose tools these are.
 
+### Monitors
+
+`Monitor.watch({ watcher, target })` tells one session when another goes
+down, as a framework item in the watcher's inbox.
+
+**What counts as down:**
+- `SubmissionFailed`, rendered with the failure's tag and message;
+- `SubmissionInterrupted`;
+- `SessionClosed`.
+
+A completed submission is not a down.
+
+**Ids and delivery.**
+- The item id comes from the event (`down:<target>:<submission>`, or
+  `down:<target>:closed`), so two monitors, or a watch resumed over a cursor,
+  enqueue each down once.
+- By default the item goes onto `Messaging`'s queue, so one delivery loop
+  carries messages and downs.
+
+**Lifetime.**
+- The watch ends when the target closes.
+- Fork it into a scope that outlives the target: a watch in the target's own
+  scope is ended by the close it would report.
+- It is live. `after` resumes over a client that can, which is the durable
+  client.
+
 ## Scheduling & self-dispatch
 
 `affe-agent/scheduling` adds two thin things over Effect's own

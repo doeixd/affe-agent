@@ -236,11 +236,14 @@ export class Messaging extends Context.Service<Messaging, Service>()(Namespace.t
  * Needs only a `PersistedQueue` store: sending is enqueuing. A fresh ledger
  * per build, so provide one layer per application, as the queue is.
  */
+/** The queue `Messaging` uses unless given another name; `Monitor` writes to it too. */
+export const defaultName = Namespace.tag("sessions/messages")
+
 export const layer = (options: Options): Layer.Layer<Messaging, never, PersistedQueue.PersistedQueueFactory> =>
   Layer.effect(Messaging, make(options))
 
 const make = Effect.fn("Messaging.make")(function*(options: Options) {
-  const name = options.name ?? Namespace.tag("sessions/messages")
+  const name = options.name ?? defaultName
   const queue = yield* PersistedQueue.make({ name, schema: SessionInbox.Item })
   const ledger = yield* Ref.make(new Map<string, Message>())
   const render = options.render ?? defaultRender

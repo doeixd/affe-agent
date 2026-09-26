@@ -2,7 +2,7 @@
 
 Status: **in progress.**
 - §2 (peer messaging) is **built, 2026-09-26**.
-- §3 (monitors) is next (item 136).
+- §3 (monitors) is **built, 2026-09-26** (item 136).
 - §4 (an in-process supervisor) follows it (item 137).
 - §5 (a durable supervisor) is parked behind item 133 (item 138).
 

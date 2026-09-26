@@ -3027,3 +3027,28 @@ verify: grep "original === undefined || original.target !== replyOptions.sender"
 verify: grep "only the recipient may reply" test/Messaging.test.ts
 ```
 
+## 2026-09-26 - item 136: monitors (plan-supervision.md §3)
+
+136. ~~**Monitors.**~~ **DONE 2026-09-26.** `/sessions`' `Monitor.watch`
+     turns a target's `SubmissionFailed`, `SubmissionInterrupted` or
+     `SessionClosed` into a framework item in the watcher's inbox.
+     - It uses `Messaging`'s queue by default.
+     - The id is the event's own coordinates, so a duplicate observation
+       enqueues once.
+     - A completed submission, and a run's own failure, are not downs.
+     - The watch ends when the target closes.
+
+     Building it found a core bug, fixed separately in `b0a7c26`:
+     `AgentClient.layer` bound every in-process session to the client's
+     lifetime rather than its handle's scope. A closed session emitted no
+     `SessionClosed`, and a watch of it never ended.
+
+     `test/Monitor.test.ts` passed 15 consecutive runs. Counting a
+     completion, generating the id, ignoring a close and counting a run
+     failure were each broken once, and a test failed each time.
+
+     ```text
+     verify: grep "export const downOf" src/sessions/Monitor.ts
+     verify: grep "two monitors of one target for one watcher enqueue each down once" test/Monitor.test.ts
+     ```
+

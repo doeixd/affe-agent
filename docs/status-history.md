@@ -6503,3 +6503,20 @@ quoted text as another agent's output, and `render` can replace the frame.
 Items 136 (monitors), 137 (an in-process supervisor) and 138 (a durable
 supervisor, gated on item 133) track the rest.
 
+## 2026-09-26 - monitors, and a session that outlived its handle
+
+`/sessions`' `Monitor` is plan-supervision §3. A target's failed or
+interrupted submission, or its close, becomes a `down` item in the watcher's
+inbox. The id comes from the event, and a completion is not a down.
+
+Building it found a core fault. `AgentClient.layer` captured its context
+while it was being built, including the layer's own `Scope`, and provided
+that over the caller's. As a result:
+- every in-process session lived until the whole client closed;
+- closing a handle's scope emitted no `SessionClosed`;
+- observers of that session hung;
+- `AgentSessionHost.closeSession` closed nothing.
+
+The caller's scope is now provided innermost (`b0a7c26`), and a test pins
+it.
+
