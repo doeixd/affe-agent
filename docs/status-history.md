@@ -6458,3 +6458,21 @@ same preflight as direct ones. Two tests in `test/ToolScheduling.test.ts`
 failed before the fix, and each half of the fix was broken once to show they
 still catch it.
 
+## 2026-09-26 - what effect-agent adds
+
+`danieljvdm/effect-agent` was reviewed from its source at `343eba5`, and
+`plan-architecture-review.md` §7 records what bears on this repository.
+
+- **Item 129 (a `Journal` seam) gets evidence.** One journal seam at turn
+  granularity runs on SQLite, Postgres and Durable Object SQLite, without
+  Workflow. It also gets a warning: that hook grew into a coordinator
+  protocol.
+- **The broker shape was adopted as item 125** (above).
+- **Three proposals are new:**
+  - item 133: park an unknown tool outcome behind an operator resolution,
+    instead of a defect that ends the run;
+  - item 134: an exported failpoint sweep for store certification;
+  - item 135: recovery as one pure, explainable decision.
+- **Its subagent budget reservation is left to the owner.** Item 99 kept
+  "counted, not capped" because reserving needs `Budget` to carry ceilings.
+

@@ -334,6 +334,98 @@ owner's release plans (item 131).
 
   These are doc fixes and are folded into item 132.
 
+## 7. What `effect-agent` adds to this review
+
+Status: **reviewed 2026-09-26** from the source of `danieljvdm/effect-agent`
+at `343eba5`, not from its documentation site.
+[plan-effect-agent-comparison.md](./plan-effect-agent-comparison.md) is the
+earlier read of that site.
+
+`effect-agent` is built durability-first:
+- The canonical record is an append-only thread log of versioned Schema
+  records (34 kinds).
+- Every append is fenced twice: by a producer epoch, and by a compare-and-swap
+  on the tail of a hash chain. Leases only signal liveness; correctness never
+  depends on them.
+- Replay never executes a tool.
+- Its engine writes to that log through `RunDurabilityHook`, which has fixed
+  commit points, and it does not use Effect Workflow.
+
+That design has three consequences here.
+
+### 7.1 Evidence for the `Journal` seam (item 129)
+
+`effect-agent` runs one journal seam, at turn granularity, on SQLite, Postgres
+and Durable Object SQLite. Its engine "behaves exactly as the ephemeral
+runtime" when the hook is absent, and its Cloudflare host resumes from the
+journal. This is the case §2 makes, demonstrated in another codebase.
+
+It also shows the failure mode. The hook has grown into a protocol with its
+coordinator:
+- `RunDurabilityHook` alone has about eight members (`commitResponse`,
+  `prepareToolCalls`, `step`, `commitCompaction`, `noteTurnUsage`, ...);
+- separate subagent, step, resume and resume-usage seams sit beside it;
+- a 10,534-line interpreter holds about 49 fields of mutable run context.
+
+If item 129 goes ahead, the seam should stay at `step` and a few commit
+points.
+
+### 7.2 Adopted: schedule the calls that do work (item 125, closed)
+
+Its code mode routes every programmatic call through one broker preflight:
+the allowlist, visibility, the subagent grant, authorization and budget. That
+is the shape item 125 needed. Building it here found an older deadlock, a
+subagent under `maxConcurrent(1)` waiting on its own permit, which
+`effect-agent` cannot have because it has no host-wide scheduling.
+`ToolScheduling.Container` fixes both.
+
+### 7.3 Its strengths, weighed against decisions already on record
+
+- **An unknown outcome is parked, not fatal.** A crashed, non-idempotent call
+  there becomes an obligation, with an explicit `resolveUnknown`, and later
+  input still runs. Here it ends the run with a `DurableToolUnresolvedError`
+  defect.
+
+  The defect is deliberate, and `DurableToolkit.ts` argues it: a *typed*
+  failure would reach the model, which would call the tool again. Parking
+  keeps that property, because the model never sees the call, and adds an
+  operator path. That is item 133.
+- **Subagent budgets are reserved.** A child's allocation is admitted
+  atomically, and all-or-nothing, against the parent's remaining budget.
+  Item 99 kept "counted, not capped" here on 2026-09-10, because a `Budget`
+  is a counter and its ceiling lives in the parent's loop. Reserving needs
+  `Budget` to carry ceilings, which item 99 calls "a redesign no user has
+  asked for".
+
+  `effect-agent` shows the redesign working. Whether that is the ask item 99
+  was waiting for is the owner's call, so it is not a new item.
+- **Adapter certification is exportable.** It has three tiers: conformance,
+  a failpoint sweep over its coordinator scenarios, and real process-loss
+  evidence. `/testing` here already exports the conformance suites,
+  `Failpoints` and `DurableEquivalence`. What it lacks is a sweep a
+  third-party store can run over every boundary. That is item 134.
+- **Recovery is a pure function, and operators can inspect it.**
+  `classifyRecovery(snapshot, evidence)` feeds an admin `explain`/`verify`
+  command. Recovery here is spread across `DurableAgentClient`'s
+  reconciliation and the workflow engine. That is item 135, after 133,
+  because a parked outcome is the first thing an operator would need to see.
+
+### 7.4 Not taken
+
+Four things are not taken, each for a stated reason:
+- **The monolithic interpreter and mutable run context.** This repository's
+  split into submission, run and turn, with atomic `Ref` transitions, is the
+  better shape.
+- **Spec ids in the source with no committed rationale.** It has about 516
+  such references.
+- **Possession-as-authorization defaults.** This repository requires
+  authorization at every network-facing host (item 110).
+- **Forbidding approval-gated tools in code mode.** Here they are routed
+  through the elicitor.
+
+`effect-agent` also has no client/server protocol, so nothing there bears on
+§5 or on the adapters.
+
 ## Suggested order
 
 1. **Item 125, the code-mode scheduling bypass.** It is a correctness fix,

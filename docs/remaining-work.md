@@ -1085,6 +1085,11 @@ owner. Client capabilities were considered and left declined (item 86).*
      - §30.1: "Do not add `AgentExecution` until a durable implementation
        demonstrates interception that the Layer boundary cannot express."
        The plan argues that Cloudflare meets that condition.
+     - **Evidence, 2026-09-26** (plan §7.1): `effect-agent` runs one journal
+       seam at turn granularity on SQLite, Postgres and Durable Object
+       SQLite, with no Workflow, and its Cloudflare host resumes from the
+       journal. Its hook bag is also the warning: keep the seam at `step` and
+       a few commit points.
 
      Large.
 
@@ -1129,6 +1134,57 @@ owner. Client capabilities were considered and left declined (item 86).*
      ```text
      verify: grep "Twenty-four erasing casts exist, in seven files" AGENTS.md
      verify: grep "(six files)" STATUS.md
+     ```
+
+133. **Park an unknown tool outcome instead of ending the run (plan
+     §7.3).** Today a non-idempotent call that was interrupted with a start
+     marker and no outcome raises `DurableToolUnresolvedError` as a defect,
+     and the submission settles `Failed`. That is deliberate: a typed failure
+     would reach the model, which would call the tool again.
+
+     `effect-agent` parks the call instead:
+     - it becomes an obligation;
+     - later input still runs;
+     - an operator resolves it with an explicit `resolveUnknown`.
+
+     The design questions:
+     - where the parked call lives (the session store's pending projection,
+       beside elicitations);
+     - how the resolution crosses the client protocol;
+     - what the model sees once it is resolved (an operator-supplied result,
+       or a failure the operator chose).
+
+     It must keep today's property that the model never sees an unknown
+     outcome as a failure. Large.
+
+     ```text
+     verify: grep "new DurableToolUnresolvedError({" src/durable/DurableToolkit.ts
+     verify: no-grep "resolveUnknown" src/client/AgentClient.ts
+     ```
+
+134. **An exported failpoint sweep for store certification (plan §7.3).**
+     `/testing` exports the store conformance suites and `Failpoints`, but a
+     third-party store can only run the conformance cases. `effect-agent`'s
+     second tier sweeps named crash points and checks that each converges.
+     The proposal: a `Failpoints.sweep` that runs a scenario once per named
+     boundary, crashing there, then asserts recovery with
+     `DurableEquivalence`. The durable session store and `DeliveryLog`
+     conformance suites would offer it. Medium.
+
+     ```text
+     verify: no-grep "sweep" src/testing/Failpoints.ts
+     verify: exists src/testing/DurableEquivalence.ts
+     ```
+
+135. **Recovery as one pure, explainable decision (plan §7.3).** Recovery
+     today is spread across `DurableAgentClient`'s reconciliation on
+     `session(id)` and the workflow engine's resume. `effect-agent` names
+     each recovery decision in a pure `classifyRecovery(snapshot, evidence)`,
+     which an admin `explain`/`verify` command reads. After 133, because a
+     parked call is the first thing an operator needs explained. Medium.
+
+     ```text
+     verify: no-grep "classifyRecovery" src/durable/DurableAgentClient.ts
      ```
 
 ### The next milestone (2026-09-06) — [plan-next-milestone.md](./plan-next-milestone.md)
