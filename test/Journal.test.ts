@@ -36,8 +36,11 @@ describe("Journal.step's types", () => {
   })
 
   it("a step that could fail is refused: model the failure as a value", () => {
-    // @ts-expect-error a step's effect cannot fail
-    Journal.step("risky", Schema.String, Effect.fail("no"))
+    // What `step` accepts as its effect, for a `string` step with no requirements.
+    type Accepts<E> = Effect.Effect<string, E> extends Parameters<typeof Journal.step<string, string, never>>[2] ? true
+      : false
+    expectTypeOf<Accepts<never>>().toEqualTypeOf<true>()
+    expectTypeOf<Accepts<string>>().toEqualTypeOf<false>()
     const handled = Journal.step("risky", Schema.Option(Schema.String), Effect.option(Effect.fail("no")))
     expectTypeOf(handled).toEqualTypeOf<Effect.Effect<Option.Option<string>, never, never>>()
   })
