@@ -113,7 +113,9 @@ an instruction. `render` replaces that frame.
 - The reply goes back to that message's sender, and is authorized as a
   `"reply"`.
 - A message received before a restart cannot be replied to: the ledger that
-  records senders lives in memory, while the queue is durable.
+  records senders lives in memory, while the queue is durable. The ledger
+  keeps the newest `maxRetained` messages (default 1024), and a reply to an
+  older one is refused the same way.
 
 **Status and ids.**
 - `inspect(id)` answers `Pending`, `Delivered` (a submission was admitted, not

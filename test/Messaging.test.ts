@@ -198,6 +198,46 @@ describe("Messaging", () => {
       }).pipe(Effect.scoped, Effect.provide(layer))
     }))
 
+  it.effect("the ledger keeps the newest maxRetained; a reply to an evicted message is refused", () =>
+    Effect.gen(function*() {
+      const queues = PersistedQueue.layer.pipe(Layer.provide(PersistedQueue.layerStoreMemory))
+      yield* Effect.gen(function*() {
+        const messaging = yield* Messaging.Messaging
+        const first = yield* messaging.send(advisor, { sender: "a", text: "1", key: "1" })
+        const second = yield* messaging.send(advisor, { sender: "a", text: "2", key: "2" })
+        const third = yield* messaging.send(advisor, { sender: "a", text: "3", key: "3" })
+        assert.isTrue(Option.isNone(yield* messaging.inspect(first)), "the oldest entry outlived the bound")
+        assert.isTrue(Option.isSome(yield* messaging.inspect(second)))
+        assert.isTrue(Option.isSome(yield* messaging.inspect(third)))
+        const exit = yield* Effect.exit(messaging.reply({ sender: "b", messageId: first, text: "late" }))
+        assert.isTrue(Exit.isFailure(exit))
+      }).pipe(
+        Effect.provide(Messaging.layer({ authorize: Messaging.allowAll, maxRetained: 2 }).pipe(Layer.provide(queues)))
+      )
+    }))
+
+  it.effect("a message the queue refused leaves no ledger entry behind", () =>
+    Effect.gen(function*() {
+      // The memory store, except that it will not take a message.
+      const refusing = Layer.effect(
+        PersistedQueue.PersistedQueueStore,
+        Effect.map(Effect.service(PersistedQueue.PersistedQueueStore), (store) => ({
+          ...store,
+          offer: () => Effect.fail(new PersistedQueue.PersistedQueueError({ message: "disk full" }))
+        }))
+      ).pipe(Layer.provide(PersistedQueue.layerStoreMemory))
+      const queues = PersistedQueue.layer.pipe(Layer.provide(refusing))
+      yield* Effect.gen(function*() {
+        const messaging = yield* Messaging.Messaging
+        const exit = yield* Effect.exit(messaging.send(advisor, { sender: "a", text: "lost", key: "k" }))
+        assert.isTrue(Exit.isFailure(exit))
+        assert.isTrue(
+          Option.isNone(yield* messaging.inspect("message:a:advisor:k")),
+          "a message that was never queued is still in the ledger, pending for ever"
+        )
+      }).pipe(Effect.provide(Messaging.layer({ authorize: Messaging.allowAll }).pipe(Layer.provide(queues))))
+    }))
+
   it.live("a refused tool send is the model's to read, not a failed run", () =>
     Effect.gen(function*() {
       const layer = yield* harness(

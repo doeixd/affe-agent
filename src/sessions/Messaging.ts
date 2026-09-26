@@ -3,6 +3,7 @@ import { Prompt, Tool } from "effect/unstable/ai"
 import { PersistedQueue } from "effect/unstable/persistence"
 import * as Agent from "../Agent.js"
 import { CurrentSessionId } from "../internal/currentSession.js"
+import { positiveInteger } from "../internal/positive.js"
 import * as Namespace from "../internal/namespace.js"
 import { CurrentPrincipal } from "../Principal.js"
 import * as SessionInbox from "./SessionInbox.js"
@@ -176,6 +177,14 @@ export interface Options {
   readonly name?: string | undefined
   /** How a message becomes the recipient's system message. */
   readonly render?: ((message: Rendered) => string) | undefined
+  /**
+   * How many messages the ledger keeps. Default 1024.
+   *
+   * The oldest go first. A reply to an evicted message is refused as
+   * unknown, the same answer as after a restart: conservative, because it
+   * can never misroute.
+   */
+  readonly maxRetained?: number | undefined
 }
 
 export interface SendOptions {
@@ -235,6 +244,7 @@ const make = Effect.fn("Messaging.make")(function*(options: Options) {
   const queue = yield* PersistedQueue.make({ name, schema: SessionInbox.Item })
   const ledger = yield* Ref.make(new Map<string, Message>())
   const render = options.render ?? defaultRender
+  const maxRetained = positiveInteger("Messaging maxRetained", options.maxRetained ?? 1024)
 
   const authorized = (request: Request) =>
     Effect.flatMap(options.authorize(request), (allowed) =>
@@ -249,16 +259,25 @@ const make = Effect.fn("Messaging.make")(function*(options: Options) {
           })
         ))
 
-  /** Record, then enqueue: a delivery that finds the item always finds its entry. */
+  /**
+   * Record, then enqueue: a delivery that finds the item always finds its
+   * entry. If the queue refuses the item, the entry this call recorded is
+   * removed again, so the ledger never holds a message that was never queued.
+   */
   const enqueue = (message: Omit<Message, "status">, text: string, inReplyTo: Option.Option<string>) =>
     Effect.gen(function*() {
-      yield* Ref.update(ledger, (entries) => {
+      const inserted = yield* Ref.modify(ledger, (entries): [boolean, Map<string, Message>] => {
         // A resend under the same key keeps the entry it already has, status
         // included: the inbox drops the duplicate, so nothing would update it.
-        if (entries.has(message.id)) return entries
+        if (entries.has(message.id)) return [false, entries]
         const next = new Map(entries)
         next.set(message.id, { ...message, status: { _tag: "Pending" } })
-        return next
+        // A `Map` iterates in insertion order, so the first keys are the oldest.
+        for (const oldest of next.keys()) {
+          if (next.size <= maxRetained) break
+          next.delete(oldest)
+        }
+        return [true, next]
       })
       const item: SessionInbox.Item = {
         id: message.id,
@@ -274,7 +293,18 @@ const make = Effect.fn("Messaging.make")(function*(options: Options) {
       }
       // The inbox's own idempotency: an id already queued is not queued twice.
       yield* queue.offer(item, { id: item.id }).pipe(
-        Effect.mapError((cause) => new SessionInbox.InboxError({ operation: "enqueue", detail: String(cause) }))
+        Effect.mapError((cause) => new SessionInbox.InboxError({ operation: "enqueue", detail: String(cause) })),
+        // Only an entry this call recorded: a resend must not remove the
+        // entry of the first send, which the queue does hold.
+        Effect.onError(() =>
+          inserted
+            ? Ref.update(ledger, (entries) => {
+              const next = new Map(entries)
+              next.delete(message.id)
+              return next
+            })
+            : Effect.void
+        )
       )
       return message.id
     })
