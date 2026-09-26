@@ -6,7 +6,8 @@ Status: **in progress.**
 - §4 (an in-process supervisor) is **built, 2026-09-26**, with `fresh`
   restarts (item 137).
 - §4.1 (an agent as supervisor) is items 139 and 140.
-- §5 (a durable supervisor) is parked behind item 133 (item 138).
+- §5 (a durable supervisor) is item 138. It was parked behind item 133,
+  which landed 2026-09-26.
 
 Written 2026-09-26, after a source review of `danieljvdm/effect-agent`
 ([plan-architecture-review.md](./plan-architecture-review.md) §7). The owner
@@ -297,6 +298,8 @@ A supervisor as a cluster `Entity`:
 - children are durable sessions reached through `DurableAgentClient`;
 - monitor cursors are stored with the entity.
 
-**Gated on item 133.** An auto-restarting durable child must first be able
-to park an unknown outcome instead of dying, or every such crash either
-restarts unsafely or ends the tree.
+**Was gated on item 133, done 2026-09-26.** An auto-restarting durable child
+must first be able to park an unknown outcome instead of dying, or every
+such crash either restarts unsafely or ends the tree. A tool marked
+`DurableToolkit.askWhenUnknown` now asks instead. An unmarked tool still ends
+the run, and the supervisor escalates it as before.

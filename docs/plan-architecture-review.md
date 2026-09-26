@@ -5,6 +5,8 @@ Status: **proposal**, except items built 2026-09-26:
 - item 126 (§1a), as `ToolExecution.authorize` and `ToolExecution.scheduled`;
 - item 128 (§3), for admission only, as `internal/admission.ts`. The outbox
   half was dropped: the ledger says why;
+- item 133 (§7.3), as `DurableToolkit.askWhenUnknown`: an opt-in question to
+  an operator through elicitation;
 - item 134 (§7.3), as `DurableEquivalence.sweep` with stores of your own;
 - item 130 (§4), as an in-process session's bounded event record. The
   host's tail is kept for finite reads, as the ledger says why. Items 125–132 in

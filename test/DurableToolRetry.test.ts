@@ -1,5 +1,5 @@
 import { assert, describe, it } from "@effect/vitest"
-import { Effect, Exit, Layer, Ref, Schema, Stream } from "effect"
+import { Cause, Effect, Exit, Layer, Ref, Schema, Stream } from "effect"
 import { Tool, Toolkit } from "effect/unstable/ai"
 import { ClusterWorkflowEngine, TestRunner } from "effect/unstable/cluster"
 import { Workflow } from "effect/unstable/workflow"
@@ -190,6 +190,38 @@ describe("durable tool retry safety", () => {
       )
     }),
     30_000
+  )
+
+  it.live("a tool that asks about an unknown outcome, with nobody to ask, ends as one that does not", () =>
+    Effect.gen(function* () {
+      // No `ToolExecution` here, so no elicitor is current: item 133's
+      // opt-in has no one to put the question to, and falls back.
+      const Asking = DurableToolkit.askWhenUnknown(Tool.make("charge", { parameters, success: Schema.String }))
+      const calls = yield* Ref.make(0)
+      const toolkit = Toolkit.make(Asking)
+      const handled = yield* toolkit.pipe(
+        Effect.provide(
+          toolkit.toLayer({
+            charge: () => Effect.flatMap(Ref.update(calls, (n) => n + 1), () => Effect.interrupt)
+          })
+        )
+      )
+      const exit = yield* runInWorkflow(
+        "AskNobody",
+        Effect.gen(function* () {
+          const wrapped = yield* DurableToolkit.wrap(handled)
+          const outcome = yield* Effect.exit(
+            Effect.flatMap(wrapped.handle("charge", { amount: "500" }, "call-1"), Stream.runDrain)
+          )
+          return Exit.isFailure(outcome) && Cause.pretty(outcome.cause).includes("DurableToolUnresolvedError")
+            ? "unresolved"
+            : outcome._tag
+        })
+      )
+      assert.strictEqual(yield* Ref.get(calls), 1)
+      assert.isTrue(Exit.isSuccess(exit) && exit.value === "unresolved")
+    }),
+    20_000
   )
 
   it.effect("retry safety is read from the tool's own idempotency annotation", () =>

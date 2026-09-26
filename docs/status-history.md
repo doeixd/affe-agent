@@ -6660,3 +6660,11 @@ Item 134. `DurableEquivalence` takes your own stores (`stores`). Its new
 with the run that never crashed. With the conformance suites, that is two
 tiers of certification, both from `/testing`. A delivery log that forgets
 its keys is caught at `after-commit`.
+
+## 2026-09-26 - an unknown tool outcome can be asked about
+
+Item 133. A durable tool marked `DurableToolkit.askWhenUnknown` no longer ends
+the run when its outcome is unknown. The run asks an operator through the
+session's ordinary elicitation (`"tool-outcome"`). Answering with the result,
+or with a failure, is what the model sees. The handler still runs once. The
+default is unchanged.

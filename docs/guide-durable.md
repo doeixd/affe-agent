@@ -64,10 +64,30 @@ const readBalance = Tool.make("read_balance", { /* ... */ })
   .annotate(Tool.Idempotent, true)
 ```
 
-The window this does not close: if the process dies before the engine persists
-the journal entry recording the unknown outcome, the call is unjournalled and
-a replay runs it. Only the engine's write can close that, so the guarantee is
-at-most-once for interruption, not for power loss.
+A process that *dies* inside the handler is covered too. A non-idempotent
+call journals a start marker before its handler runs. A replacement that
+finds the marker and no outcome treats the call as unknown and does not run
+it again (`test/DurableToolCrash.test.ts`).
+
+**An unknown outcome can be asked about instead.** Some outcomes can be
+checked: a payment can be looked up in the provider's dashboard. Mark such a
+tool `DurableToolkit.askWhenUnknown`, and an unknown outcome pauses the run
+with a `"tool-outcome"` request. Its `detail` is the tool name, the call id
+and the parameters. It shows in the session's pending requests on every
+transport, and the ordinary `respond` answers it:
+
+```ts
+const charge = DurableToolkit.askWhenUnknown(Tool.make("charge", { parameters, success: Receipt }))
+
+// An operator, having checked:
+yield* session.respond({ id: request.id, granted: true, value: { id: "rcpt-42" } }) // it went through
+yield* session.respond({ id: request.id, granted: false, value: "card declined" }) // it did not
+```
+
+The model sees the operator's answer: the result, or the failure. It never
+sees "unknown" dressed up as a failure it might retry. With nobody to ask,
+or with an answer that is not the tool's result, the run ends as it would
+without the annotation.
 
 A tool handler that *dies* fails the run, as it does in-process, and so does
 a model call that dies: the journal records the defect as a value so a

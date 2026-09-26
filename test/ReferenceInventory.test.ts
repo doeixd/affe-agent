@@ -47,6 +47,10 @@ const classified: Record<string, { readonly class: Class; readonly why: string }
     class: "no-feature",
     why: "a tool annotation: none means an ordinary tool, which runs as an activity as before"
   },
+  "src/durable/DurableToolkit.ts:OnUnknownOutcome": {
+    class: "no-feature",
+    why: "a tool annotation: none means an unknown outcome ends the run, as it always has"
+  },
   "src/internal/failpoint.ts:Failpoint": {
     class: "seam",
     why: "no-op outside the crash tests"

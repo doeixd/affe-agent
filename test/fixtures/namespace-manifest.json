@@ -37,6 +37,7 @@
   "affe-agent/data/DataChannels",
   "affe-agent/dispatch",
   "affe-agent/durable/DurableDelegation",
+  "affe-agent/durable/OnUnknownOutcome",
   "affe-agent/durable/ToolContracts/CompatibleWith",
   "affe-agent/export/ExportError",
   "affe-agent/http/Client",

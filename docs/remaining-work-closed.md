@@ -3316,3 +3316,52 @@ verify: grep "only the recipient may reply" test/Messaging.test.ts
      verify: grep "export const certification = scenario(" src/testing/DurableEquivalence.ts
      verify: grep "a delivery log that does not deduplicate is found" test/EquivalenceSweep.test.ts
      ```
+
+## 2026-09-26 - item 133: an unknown outcome, asked about
+
+133. ~~**Park an unknown tool outcome instead of ending the run (plan
+     §7.3).**~~ **DONE 2026-09-26 as an opt-in, with one part left out.**
+     - **The opt-in.** `DurableToolkit.askWhenUnknown(tool)` sets
+       `OnUnknownOutcome` to `"ask"`. The default stays `"end-run"`: the
+       defect, and a `Failed` submission, as before. The annotation is per
+       tool, because whether anyone can find out what happened depends on
+       the tool.
+     - **The question.** For a marked tool, an `Unresolved` outcome is
+       followed by a question, asked in the workflow body through the
+       session's elicitor. Under `/durable` that is a durable deferred, so the
+       workflow suspends. The request's kind is `"tool-outcome"` and its
+       detail is `UnknownOutcome` (tool, call id, parameters). Its id derives
+       from the call's activity name, so a replay asks the same question.
+     - **The answer.** The ordinary `respond`, on every transport. The
+       resolution API the item proposed turned out to be elicitation, which
+       already has a pending projection in the session store and a path
+       through every client.
+       - `granted: true` with the tool's result, encoded: the call
+         succeeded, and the model sees that result.
+       - `granted: false` with an optional reason: the call failed, and the
+         model sees that failure.
+
+       The model sees only what an operator stated, never "unknown" posing
+       as a failure.
+     - **Falling back.** With no elicitor to ask, or an answer that does not
+       decode as the tool's result, the run ends as `"end-run"` would.
+     - **Left out: later input running past the parked call.** The
+       submission waits, as it waits for an approval. Letting the session take
+       new input while one call is parked would make the parked call an
+       obligation outside any submission. That is a new lifecycle, and nothing
+       has asked for it yet.
+
+     `test/UnknownOutcome.test.ts` kills the process inside the handler, and
+     an operator answers through `pending` and `respond`. It covers success,
+     failure, and an answer that does not decode. In each case the handler
+     runs once. `test/DurableToolRetry.test.ts` covers the fallback when
+     there is no elicitor. The delivered events read `ToolCallInterrupted`,
+     `ElicitationRequested`, `ElicitationResolved`, then `ToolCallSucceeded`.
+     Making the annotation never match was broken once, and both answering
+     tests failed.
+
+     ```text
+     verify: grep "export const askWhenUnknown = " src/durable/DurableToolkit.ts
+     verify: grep "Context.get(tool.annotations, OnUnknownOutcome) === \"ask\"" src/durable/DurableToolkit.ts
+     verify: grep "an operator who says it succeeded supplies the result" test/UnknownOutcome.test.ts
+     ```
