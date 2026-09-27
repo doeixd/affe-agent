@@ -2958,3 +2958,564 @@ provider passes `SandboxConformance` on Windows as on POSIX.
 verify: grep "toWorkspacePath" src/sandbox/Sandbox.ts
 verify: grep "NtOpenFile" src/sandbox/Sandbox.ts
 ```
+
+## 2026-09-26 - code mode and subagents under host scheduling
+
+125. ~~**Code mode bypasses host scheduling.**~~ **DONE 2026-09-26.**
+     Found by the architecture review
+     ([plan-architecture-review.md](./plan-architecture-review.md) §1).
+     `CodeMode.invoke` ran the handler without `ToolScheduling.Current`, so
+     a tool the host serialised was not serialised when a program called
+     it.
+
+     The probe for the fix found a second, older fault: under
+     `maxConcurrent(1)`, a `Subagent.tool` call held the only permit while
+     its child's tool call waited for it, and the run hung.
+
+     Both are fixed by one idea, borrowed from `effect-agent`'s broker,
+     where nested calls get a direct call's preflight: **schedule the calls
+     that do work.**
+     - `ToolScheduling.Container` annotates a tool whose work is other tool
+       calls.
+     - `executeSettled` skips the host's `around` for a container call.
+     - `CodeMode.invoke` holds each nested handler under the host's
+       scheduling. It holds the handler, not the approval wait.
+     - `execute`, `Subagent.tool`, `toolScoped` and `Subagent.durable` are
+       containers.
+
+     `test/ToolScheduling.test.ts` covers both faults:
+     - a subagent under `maxConcurrent(1)` finishes, and only its child's
+       call is scheduled;
+     - a program's two parallel `book_room` calls never overlap under
+       `serialize`, and `execute` itself is not scheduled.
+
+     Each half was broken once, and the tests failed on it.
+
+     ```text
+     verify: grep "export const Container = Context.Reference<boolean>(Namespace.tag(\"ToolScheduling/Container\")" src/ToolScheduling.ts
+     verify: grep "ToolExecution.scheduled(tool, { name: tool.name, params: inputData.success })(drained)" src/code/CodeMode.ts
+     verify: grep "a subagent under maxConcurrent(1) finishes" test/ToolScheduling.test.ts
+     verify: grep "code mode's nested calls are scheduled like direct ones" test/ToolScheduling.test.ts
+     ```
+
+## 2026-09-26 - messaging between sessions (plan-supervision.md §2)
+
+`/sessions`' `Messaging`, after `effect-agent`'s peer messaging.
+- **What a message is.** A framework `SessionInbox` item, so delivery is
+  durable, deduplicated and never into a submission in flight.
+- **Routes** are named at construction, and a tool is built per route.
+- **Authorization.** `authorize` is required, with `allowAll` as the opt-out.
+- **Replies** go only to the recorded sender of a message the replying
+  session received.
+- **Framing.** The recipient reads a harness-framed system message that
+  labels the quoted text as another agent's output.
+- **Status** is recorded per message.
+
+The tools read a context service, and `deliverer` is built where the client
+exists: joined, they would be a layer cycle.
+
+`test/Messaging.test.ts` covers delivery and framing, replies by the tool,
+refusal of a non-recipient's reply, authorization with nothing enqueued on a
+refusal, idempotent keys, a missing route, a refusal the model reads, and the
+tools' requirement type. The recipient check, authorization, deduplication,
+the framing and the type assertion were each broken once, and a test failed
+each time.
+
+```text
+verify: grep "export class Messaging extends Context.Service<Messaging, Service>()(Namespace.tag(\"sessions/Messaging\"))" src/sessions/Messaging.ts
+verify: grep "original === undefined || original.target !== replyOptions.sender" src/sessions/Messaging.ts
+verify: grep "only the recipient may reply" test/Messaging.test.ts
+```
+
+## 2026-09-26 - item 136: monitors (plan-supervision.md §3)
+
+136. ~~**Monitors.**~~ **DONE 2026-09-26.** `/sessions`' `Monitor.watch`
+     turns a target's `SubmissionFailed`, `SubmissionInterrupted` or
+     `SessionClosed` into a framework item in the watcher's inbox.
+     - It uses `Messaging`'s queue by default.
+     - The id is the event's own coordinates, so a duplicate observation
+       enqueues once.
+     - A completed submission, and a run's own failure, are not downs.
+     - The watch ends when the target closes.
+
+     Building it found a core bug, fixed separately in `b0a7c26`:
+     `AgentClient.layer` bound every in-process session to the client's
+     lifetime rather than its handle's scope. A closed session emitted no
+     `SessionClosed`, and a watch of it never ended.
+
+     `test/Monitor.test.ts` passed 15 consecutive runs. Counting a
+     completion, generating the id, ignoring a close and counting a run
+     failure were each broken once, and a test failed each time.
+
+     ```text
+     verify: grep "export const downOf" src/sessions/Monitor.ts
+     verify: grep "two monitors of one target for one watcher enqueue each down once" test/Monitor.test.ts
+     ```
+
+## 2026-09-26 - item 137: an in-process supervisor (plan-supervision.md §4)
+
+137. ~~**An in-process supervisor.**~~ **DONE 2026-09-26**, as `fresh`
+     restarts; item 139 has the rest. `/sessions`' `Supervisor.run` provides:
+     - OTP's restart types and strategies, with temporary siblings stopped
+       but never restarted;
+     - an intensity window;
+     - a token ceiling on a budget the children share, which also forwards
+       each charge to the ambient budget;
+     - escalation as `SupervisorEscalatedError`, which a parent supervisor
+       classifies like any failure.
+
+     Children are effects, and `task` makes an agent one. The default
+     classifier restarts only an `AiError` its provider marks retryable. A
+     `DurableToolUnresolvedError` escalates whatever `classify` says.
+
+     `test/Supervisor.test.ts` has 14 cases and was stable over 10 runs.
+     Six rules were each broken once, and a test failed each time: the
+     unresolved rule, the default classifier, the window, `rest_for_one`'s
+     scope, the temporary sibling, and a task's budget shadowing the
+     supervisor's.
+
+     ```text
+     verify: grep "if (Exit.isFailure(exited.exit) && unresolved(exited.exit.cause)) {" src/sessions/Supervisor.ts
+     verify: grep "an unknown tool outcome escalates even when classify would restart it" test/Supervisor.test.ts
+     ```
+
+## 2026-09-26 - item 139: an agent as supervisor, slice 1 (plan-supervision.md §4.1)
+
+139. ~~**An agent as supervisor, slice 1.**~~ **DONE 2026-09-26.**
+     - **Consultation.** `Supervisor.run` takes `onGiveUp: ask({ control,
+       notify, timeout, grant })`, and consults an agent where it would give
+       up. `toInbox(sessionId)` is the usual `notify`.
+     - **Control.** `control()` gives the agent six tools, and the same
+       operations as effects.
+     - **Limits kept.** The budget, the unknown outcome, and intensity except
+       through `grant.restarts`. A timeout falls back to giving up.
+     - **Tasks.** They publish their session through `CurrentChild`.
+       `resubmit` keeps one session per supervisor, keyed by the
+       supervisor's scope. A fresh restart can start from the agent's note.
+     - **Context.** Every start runs in the supervisor's context, replaced
+       whole.
+     - **Record.** `Report.decisions`.
+
+     `test/SupervisorAgent.test.ts` has 14 cases, including an end-to-end
+     test with a scripted supervising agent. It was stable over 12 runs.
+     Nine rules were each broken once, and a test failed each time:
+     consultation, the unknown-outcome refusal, the allowance, changes
+     outside a decision, the supervisor's context, the note, `resubmit`'s
+     kept session, the timeout, and detaching.
+
+     ```text
+     verify: grep "export const toInbox" src/sessions/Supervisor.ts
+     verify: grep "(child) => Effect.updateContext(child, (_: Context.Context<never>) => services)" src/sessions/Supervisor.ts
+     verify: grep "an unknown tool outcome cannot be restarted by the agent either" test/SupervisorAgent.test.ts
+     ```
+
+## 2026-09-26 - item 140: an agent as supervisor, slice 2 (plan-supervision.md §4.1)
+
+140. ~~**An agent as supervisor, slice 2.**~~ **DONE 2026-09-26.**
+     - **`steer_child`** steers a running task through its published session,
+       as a framed supervisor's note.
+     - **`start_child`** starts a child from a template declared on the spec.
+       - The supervisor names it `<template>-<n>`, skipping ids in use.
+       - `maxTemplateStarts` caps it, default 8.
+       - A spent budget refuses a start.
+     - **`"ask"`** is a classifier answer, and `"escalate"` without an agent.
+     - **Not built, by decision.** Charging the supervising agent's own turns
+       to `maxTokens`. The agent is a session made outside `run`, and an
+       ambient `Budget` provided to both already caps them together. The
+       plan records it and when it reopens.
+     - **Split out.** `rewind`, to item 141.
+
+     `test/SupervisorAgent.test.ts` gained five cases, and was stable over 10
+     runs. Seven rules were each broken once, and a test failed each time:
+     the steer, its framing, the cap, the id collision, the budget refusal,
+     the ask marker, and `"ask"` not restarting.
+
+     ```text
+     verify: grep "steer_child" src/sessions/Supervisor.ts
+     verify: grep "while (taken.has(`${name}-${n}`)) n += 1" src/internal/restartPlan.ts
+     verify: grep "classify can ask: the agent decides an exit the rules would have restarted" test/SupervisorAgent.test.ts
+     ```
+
+## 2026-09-26 - item 132: doc drift found by the architecture review
+
+132. ~~**Doc drift found by the review.**~~ **DONE 2026-09-26.**
+     - **The cast count.** `AGENTS.md` and `STATUS.md` now agree with the
+       enforced inventory: 24 erasing casts in nine files.
+     - **`transport.md`** names the MCP server's `agent_*` tools, not only
+       `ask_agent`.
+     - **The README** names `/cloudflare` among the host entries.
+     - **`plan-workbench.md`** says W0 is complete and W1 is under way.
+
+     `AGENTS.md` also gained the `Effect.context()` trap, which bit twice in
+     one day (`b0a7c26`, and a supervisor restart caught while typing
+     `1868ec3`).
+
+     ```text
+     verify: grep "erasing casts exist, in nine files" AGENTS.md
+     verify: grep "with its reason (nine files)" STATUS.md
+     verify: grep "captures everything the fibre has, a \`Scope\`" AGENTS.md
+     verify: grep "except \`/sandbox/local\`, \`/blob/fs\` and \`/cloudflare\`" README.md
+     ```
+
+## 2026-09-26 - item 126: one internal path for every tool call
+
+126. ~~**One internal path for every tool call (plan 1a).**~~ **DONE
+     2026-09-26.** Two internal functions in `ToolExecution` hold the stages
+     that decide whether and when a call runs:
+     - `authorize`: the decision, the tool's floor, the question for an
+       `Ask`, and a remembered grant;
+     - `scheduled`: the host's scheduling, skipping a container.
+
+     The direct path and code mode's nested calls both go through them. Each
+     still settles its own way: the first with events and a result for the
+     model, the second as a value the program reads. This keeps within
+     `PLAN.md` §17: tools are still defined with Effect AI, and nothing
+     public changed.
+
+     The unification fixed one gap: code mode dropped an "allow always"
+     answer, and never called the policy's `remember`. It now does, and
+     `test/CodeMode.test.ts` pins it.
+
+     Moving the approval wait inside `authorize` briefly announced an
+     interrupted approval twice. `AgentSession`'s "every started tool call
+     gets exactly one terminal event" test caught it before the commit.
+
+     Breaking the shared `remember` step fails the code-mode test and five
+     direct-path tests at once, which is the evidence the two paths share
+     it.
+
+     ```text
+     verify: grep "export const authorize = Effect.fn(\"ToolExecution.authorize\")" src/ToolExecution.ts
+     verify: grep "ToolExecution.authorize(tool, {" src/code/CodeMode.ts
+     verify: grep "ToolExecution.scheduled(tool, { name: tool.name, params: inputData.success })(drained)" src/code/CodeMode.ts
+     ```
+
+## 2026-09-26 - item 130: in-process event retention
+
+130. ~~**One event-retention seam (plan 4).**~~ **DONE 2026-09-26, with one
+     mechanism kept apart on purpose.**
+     - **The record.** Each in-process session keeps a bounded record of its
+       recent envelopes (`internal/eventRing.ts`, `retainedEvents`, default
+       256). It is fed from the session's synchronous `eventSink`, through
+       `makeEngine`, since the public `make` takes no sink.
+     - **Resuming.** `events({ after })` subscribes first, then replays the
+       record after the cursor, then continues live, dropping any repeat by
+       sequence.
+     - **Refusal.** A cursor behind the record is refused with
+       `AgentInvalidRequestError`, as the host's tail refuses one.
+     - **Beyond the in-process client.** RPC and the relay resume too,
+       through the host, which passes the cursor through. Their conformance
+       harnesses, and the in-process ones, now declare `resumesEvents: true`
+       and pass the resumption case.
+
+     **Kept apart, by decision.** The host's tail still serves `eventLog`.
+     Letting a session's record replace it would ignore the operator's
+     `maxRetainedEvents`, and the boundary the host reports (`oldest` is
+     when the host began holding the session). Five host tests caught
+     exactly that when the record first offered `eventLog`. `Agent.start`'s
+     bounded trace also stays its own: it is one submission's replay, with
+     limits of its own.
+
+     `test/EventRetention.test.ts` covers the window, the refusal, a replay
+     continuing live, and `retainedEvents: 0`. Serving a hole was broken
+     once, and a test failed. Two rules guard a race rather than a sequence
+     a test can force: the repeat filter, and subscribing before reading.
+     They cover an envelope emitted between the subscription and the read.
+
+     ```text
+     verify: exists src/internal/eventRing.ts
+     verify: grep "const recorded = yield* log.since(after)" src/client/AgentClient.ts
+     verify: grep "a cursor behind the window is refused, never answered with a hole" test/EventRetention.test.ts
+     ```
+
+## 2026-09-26 - item 128: admission as one pure transition
+
+128. ~~**The session state machine as one pure reducer (plan 3).**~~ **DONE
+     2026-09-26 for admission. The outbox half was dropped, with the reason
+     below.**
+     - **Admission.** `internal/admission.ts` states it once, as
+       `admit(slot, key) → decision`:
+       - a missing or closed session refuses;
+       - an idle one opens `submissionCount + 1`;
+       - a held one is busy unless the caller presents the holder's key, in
+         which case it rejoins.
+
+       `AgentSession`'s `claim`, the memory store and the SQL store each call
+       it inside their own atomic section: a `SubscriptionRef.modify`, a
+       `Ref.modify`, a transaction. The two durable stores also share
+       `openClaim`, which builds the claim an `Open` allocates. The SQL
+       store's write-then-read-back check stays its own, because it guards
+       the database's concurrency, not the rule.
+     - **The suite.** `test/Admission.test.ts` holds the rule as a table.
+       It runs the same slots against the memory store, the SQL store and
+       a local session, so a store that grows its own variant fails there.
+       Two things were broken once, and a test failed each time: letting two
+       unkeyed requests rejoin, and the SQL store refusing its own key.
+     - **The Supervisor, the same way.** Its rules were written inline in
+       the loop. They are now pure functions in `internal/restartPlan.ts`:
+       `siblingsOf` (who is stopped and started with a failed child, per
+       strategy), `intensity` (the restart window) and `freshId`.
+       `test/RestartPlan.test.ts` states them as tables. Its state stays
+       mutable under its one lock, which already serialises every change.
+       Letting `rest_for_one` take earlier siblings was broken once; both
+       the table and `Supervisor.test.ts` failed.
+     - **The outbox half, dropped.** The item said the dispatch outbox exists
+       twice. Read closely, the two are different machines:
+       - the cluster's row is one per session, written before the
+         acknowledgement and cleared once dispatch lands;
+       - Cloudflare's intent is one per alarm, moves through `pending`,
+         `running` and `settled`, and settles inside the history
+         transaction.
+
+       One reducer over both would be a union of two lifecycles, not a
+       shared rule.
+
+     ```text
+     verify: exists src/internal/admission.ts
+     verify: grep "Admission.admit(slotOf(found), Option.fromUndefinedOr(submission.key))" src/durable/DurableSessionStore.ts
+     verify: grep "const decision = Admission.admit<Option.Option<SubmissionId>>(" src/AgentSession.ts
+     verify: grep "two unkeyed requests are two requests" test/Admission.test.ts
+     verify: grep "const plan = RestartPlan.siblingsOf(strategy, all, entry.id, (id) => running.has(id))" src/sessions/Supervisor.ts
+     ```
+
+## 2026-09-26 - item 134: a store of your own, certified
+
+134. ~~**An exported failpoint sweep for store certification (plan
+     §7.3).**~~ **DONE 2026-09-26, in `DurableEquivalence`, not
+     `Failpoints`.**
+     - **Why there.** `Failpoints.covered` crashes at a subsystem's own
+       declared boundaries, but a third-party store calls none: the
+       boundaries live inside the shipped stores. The boundaries that matter
+       for any store are the engine's, between the model call, the tools and
+       the commit. The equivalence oracle already crashes there.
+     - **`Options.stores`.** Any of the channels store, session store and
+       delivery log can replace the SQL one. It has two levels, because a run
+       has two processes over one backing: the outer effect runs once per
+       run and builds a fresh backing; the function it returns hands each
+       process its view of it.
+     - **`sweep(scenario, options)`.** One straight run, then a crash at
+       every boundary (or those named in `at`), each finished by a second
+       process. It returns a row per boundary with `equivalent` and the
+       observation. A difference is a row, not a failure, so a certifier
+       sees every boundary at once.
+     - **`certification`.** A stock scenario that reaches every boundary.
+     - **The suites.** Both conformance suites now point to the sweep as the
+       second tier.
+
+     `test/EquivalenceSweep.test.ts` has two tests. Memory stores pass at all
+     four boundaries. A delivery log that never deduplicates is found at
+     `after-commit`, where the replacement re-emits a replayed turn. Making
+     every row `equivalent` was broken once, and that test failed.
+
+     The first version shared one store instance across the sweep's runs,
+     and the second run died at `after-tool-call`. It was reading the first
+     run's session. That is why the outer level exists.
+
+     ```text
+     verify: grep "export const sweep = " src/testing/DurableEquivalence.ts
+     verify: grep "export const certification = scenario(" src/testing/DurableEquivalence.ts
+     verify: grep "a delivery log that does not deduplicate is found" test/EquivalenceSweep.test.ts
+     ```
+
+## 2026-09-26 - item 133: an unknown outcome, asked about
+
+133. ~~**Park an unknown tool outcome instead of ending the run (plan
+     §7.3).**~~ **DONE 2026-09-26 as an opt-in, with one part left out.**
+     - **The opt-in.** `DurableToolkit.askWhenUnknown(tool)` sets
+       `OnUnknownOutcome` to `"ask"`. The default stays `"end-run"`: the
+       defect, and a `Failed` submission, as before. The annotation is per
+       tool, because whether anyone can find out what happened depends on
+       the tool.
+     - **The question.** For a marked tool, an `Unresolved` outcome is
+       followed by a question, asked in the workflow body through the
+       session's elicitor. Under `/durable` that is a durable deferred, so the
+       workflow suspends. The request's kind is `"tool-outcome"` and its
+       detail is `UnknownOutcome` (tool, call id, parameters). Its id derives
+       from the call's activity name, so a replay asks the same question.
+     - **The answer.** The ordinary `respond`, on every transport. The
+       resolution API the item proposed turned out to be elicitation, which
+       already has a pending projection in the session store and a path
+       through every client.
+       - `granted: true` with the tool's result, encoded: the call
+         succeeded, and the model sees that result.
+       - `granted: false` with an optional reason: the call failed, and the
+         model sees that failure.
+
+       The model sees only what an operator stated, never "unknown" posing
+       as a failure.
+     - **Falling back.** With no elicitor to ask, or an answer that does not
+       decode as the tool's result, the run ends as `"end-run"` would.
+     - **Left out: later input running past the parked call.** The
+       submission waits, as it waits for an approval. Letting the session take
+       new input while one call is parked would make the parked call an
+       obligation outside any submission. That is a new lifecycle, and nothing
+       has asked for it yet.
+
+     `test/UnknownOutcome.test.ts` kills the process inside the handler, and
+     an operator answers through `pending` and `respond`. It covers success,
+     failure, and an answer that does not decode. In each case the handler
+     runs once. `test/DurableToolRetry.test.ts` covers the fallback when
+     there is no elicitor. The delivered events read `ToolCallInterrupted`,
+     `ElicitationRequested`, `ElicitationResolved`, then `ToolCallSucceeded`.
+     Making the annotation never match was broken once, and both answering
+     tests failed.
+
+     ```text
+     verify: grep "export const askWhenUnknown = " src/durable/DurableToolkit.ts
+     verify: grep "Context.get(tool.annotations, OnUnknownOutcome) === \"ask\"" src/durable/DurableToolkit.ts
+     verify: grep "an operator who says it succeeded supplies the result" test/UnknownOutcome.test.ts
+     ```
+
+## 2026-09-26 - item 135: recovery, explained
+
+135. ~~**Recovery as one pure, explainable decision (plan §7.3).**~~ **DONE
+     2026-09-26 for the client's reconciliation. The engine's own journal
+     replay is out of scope.**
+     - **The decision.** `/durable`'s `Recovery.classify(evidence)` decides
+       what a session's reconciliation owes. The evidence is the record, the
+       admission marker, the undelivered answers and the pending questions.
+       The possible decisions:
+       - `Missing` or `Idle`: nothing is owed;
+       - `Dispatch`: claimed, never started;
+       - `FinishEnded`: the run ended, and the claim is still held;
+       - `DeliverAnswers`: answers were accepted and never handed over;
+       - `Running`: nothing is owed.
+
+       `DurableAgentClient`'s `reconcile` now gathers that evidence and
+       switches on the decision. It no longer decides inline. The reasoning
+       it carried, why an ended claim is finishable by anyone, stays with the
+       `FinishEnded` branch.
+     - **For an operator.** `Recovery.inspect(stores, sessionId)` reads the
+       same evidence and returns:
+       - the decision, and `explain`'s sentence for it;
+       - `parked`: the item-133 `"tool-outcome"` questions waiting for an
+         operator;
+       - `findings`: where the stores disagree with themselves, such as
+         status versus claim, or questions and answers orphaned on an idle
+         session.
+
+       It reads and changes nothing. Acquiring the session is what acts on
+       the decision.
+     - **Out of scope: the engine's journal replay.** That is the workflow
+       engine's, and a journal is not a store this library reads.
+
+     `test/Recovery.test.ts` holds `classify` as a table, and checks
+       `explain`, `findings` and a read-only `inspect` over memory stores.
+     Dropping the `FinishEnded` case was broken once. The table failed, and so
+     did the real reacquisition test in `DurableAgentClient.test.ts` (R173).
+
+     ```text
+     verify: exists src/durable/Recovery.ts
+     verify: grep "const decision = Recovery.classify(evidence)" src/durable/DurableAgentClient.ts
+     verify: grep "ended wins over undelivered answers" test/Recovery.test.ts
+     ```
+
+## 2026-09-27 - item 129: the Journal seam, closed on three slices
+
+129. ~~**A `Journal` seam in place of the durable wrapper set (plan 2).**~~
+     **DONE 2026-09-27, as far as it pays. The owner approved the seam, then
+     handed the remaining decisions to the implementer, and the two slices
+     left were decided against, with reasons.**
+     - **Built.** `PLAN.md` §30.1 is amended with the owner's decision and
+       constraint: the seam stays at `step` and a few commit points. There
+       are three slices:
+       1. `Journal.step(name, schema, effect)`: the identity locally, an
+          activity under `/durable` (`DurableJournal`), for anything that
+          runs in a submission;
+       2. the commit points `Journal.modelCall` and `Journal.modelStream`,
+          which the kernel uses under an `ExecutionPlan`, so a durable agent
+          carries a plan, batch or streamed. The ladder is one journalled
+          activity through `DurableModel.wrapWithCommit`, and a streamed
+          ladder still delivers its parts live;
+       3. one body assembly for both durable workflows,
+          `DurableAgent.assemble`. It found that the `DurableAgentClient` path
+          never refused a plan, so its provider calls were repeated on
+          replay.
+     - **Not built: tool calls onto `step`.** `DurableToolkit` already
+       journals tool outcomes, with start markers and parked unknown
+       outcomes (item 133). Moving that onto the seam would change activity
+       names for no behaviour a user sees, and it only pays off with the
+       Cloudflare slice.
+     - **Not built: a Cloudflare journal.** It pays off only if the kernel
+       commits every model call. Under `/durable` that retires
+       `DurableModel`'s substitution, which does two things: it renames
+       `model-N`, stranding journals in flight at deploy, and it drops
+       durability for the model calls the kernel does not make, such as a
+       compaction summariser's. The Cloudflare host already survives process
+       loss at turn granularity, since history and events are written as
+       they commit. The prize is the one turn in flight, which does not buy
+       a versioned cut-over. If a Cloudflare deployment needs mid-turn
+       resume, the way in is a Cloudflare-side model substitution over DO
+       SQLite, as `DurableModel` is over Activity, not a kernel change.
+
+     ```text
+     verify: grep "Amended 2026-09-26, by the owner's decision (item 129)." PLAN.md
+     verify: grep "Effect.provideService(Journal.Journal, journal)," src/durable/DurableAgent.ts
+     verify: grep "const assembled = yield* DurableAgent.assemble(agent, { prefix: scopePrefix })" src/durable/DurableSubmission.ts
+     verify: no-grep "cannot stream under an ExecutionPlan" src/durable/DurableAgent.ts
+     verify: grep "a replayed turn reads the step's recorded value instead of repeating it" test/Journal.test.ts
+     verify: grep "a replayed turn does not ask the plan's provider again" test/Journal.test.ts
+     verify: grep "the durable client runs an execution plan, batch and streamed, and leaves the session idle" test/Durable.test.ts
+     ```
+
+## 2026-09-27 - item 138: a supervisor that survives its own death
+
+138. ~~**A durable supervisor (plan §5).**~~ **DONE 2026-09-27 as a ledger,
+     not an entity.**
+     - **`SupervisorLedger`.** It runs in memory or over any `KeyValueStore`.
+       It records, per child, the attempts, the attempt open now and its
+       submission, and whether the child finished; and, per supervisor, the
+       restart history. `Spec.ledger` makes `run` use it:
+       - a child that finished normally is not rerun unless it is
+         `permanent`;
+       - the predecessor's restarts count against intensity;
+       - each start of a spec child opens an attempt, or resumes the open
+         one.
+     - **`Supervisor.remoteTask`.** It asks a session through any
+       `AgentClient`. It waits on the open attempt's submission when one is
+       recorded; otherwise it submits under the key `name:child:n` and
+       records the submission before waiting. Stopping it interrupts the
+       remote run.
+     - **A design bug, found by the test against `DurableAgentClient`.** The
+       first version counted a new attempt whenever none had a recorded
+       submission. A supervisor that died between submit and record was then
+       followed by one submitting under a new key, which the durable client
+       refused as busy. The attempt is now opened before anything is
+       submitted, and the next life reuses its key and rejoins the claim.
+     - **Not built: the supervisor as a cluster `Entity`.** The ledger is
+       what an entity would have held. Whatever restarts the effect (a
+       scheduled job, a process manager, an entity) gets the behaviour. An
+       entity host waits for a deployment that needs the cluster to be the
+       restarter. Template children are not recorded: they belong to one
+       life.
+
+     `test/SupervisorDurable.test.ts` covers:
+     - a plain remote task;
+     - waiting on a recorded submission;
+     - the order of ledger writes;
+     - skipping a finished child;
+     - inherited and recorded restart history;
+     - the `keyValue` ledger;
+     - the rejoin against a real `DurableAgentClient`.
+
+     - **Fixed in review, 2026-09-27.** Two gaps in the first version:
+       - a ledger was never cleared, so a later deliberate run under the same
+         name (tomorrow's job) would skip every child forever;
+       - interrupting the supervisor stopped the remote runs but left their
+         submissions recorded, so the next life waited on a stopped run and
+         escalated.
+
+       A life that ends, by finishing or escalating, now clears its ledger,
+       and an interrupted remote attempt is abandoned (`Attempt.abandon`).
+
+     Seven rules were broken once, and a test failed each time: resuming,
+     skipping, loading the history, reusing the open attempt, clearing on
+     completion, clearing on escalation, and abandoning on interrupt. The
+     intensity test first passed with the history ignored, because a child
+     that always fails reaches the limit anyway. It now counts runs.
+
+     ```text
+     verify: exists src/sessions/SupervisorLedger.ts
+     verify: grep "export const remoteTask = <R>(" src/sessions/Supervisor.ts
+     verify: grep "a restarted supervisor rejoins the claim its predecessor took, not a second one" test/SupervisorDurable.test.ts
+     ```

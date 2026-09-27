@@ -25,6 +25,7 @@ import * as AgentSubmission from "./AgentSubmission.js"
 import * as PromptWire from "./PromptWire.js"
 import { AgentBusyError, AgentClosedError, AgentIdleError, AgentObservationLagError, AgentSubmissionNotFoundError } from "./Errors.js"
 import type * as ToolExecution from "./ToolExecution.js"
+import * as Admission from "./internal/admission.js"
 import * as EventBus from "./internal/eventBus.js"
 import type * as Observation from "./internal/observation.js"
 import * as History from "./internal/history.js"
@@ -570,9 +571,18 @@ const busy = (sessionId: SessionId, incumbent: Option.Option<SubmissionId>): Age
  */
 const claim = (self: Session<any>): Effect.Effect<Claim> =>
   SubscriptionRef.modify(self.state, (s): [Claim, SessionState] => {
-    if (s.status === "closed") return [{ _tag: "Closed" }, s]
-    if (s.status === "running") return [{ _tag: "Busy", incumbent: s.activeSubmissionId }, s]
-    const count = s.submissionCount + 1
+    const decision = Admission.admit<Option.Option<SubmissionId>>(
+      s.status === "closed"
+        ? { _tag: "Closed" }
+        : s.status === "running"
+        ? { _tag: "Held", holder: s.activeSubmissionId, key: Option.none() }
+        : { _tag: "Idle", submissionCount: s.submissionCount },
+      // A local prompt carries no idempotency key, so nothing here rejoins.
+      Option.none()
+    )
+    if (decision._tag === "Closed" || decision._tag === "Missing") return [{ _tag: "Closed" }, s]
+    if (decision._tag !== "Open") return [{ _tag: "Busy", incumbent: decision.holder }, s]
+    const count = decision.ordinal
     const submissionId = Ids.submissionId(self.submissionName(count))
     return [
       { _tag: "Claimed", submissionId },

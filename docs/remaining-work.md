@@ -1014,6 +1014,60 @@ history; 90 holds it.)*
      verify: grep "released by the sweep" test/Relay.test.ts
      ```
 
+### Architecture review — 2026-09-26 — [plan-architecture-review.md](./plan-architecture-review.md)
+
+*A review of the whole architecture after `docs/architecture.md` was written.
+Its main finding: the tool-call pipeline and the session's nondeterministic
+steps are each rebuilt, whole or in part, wherever they are needed. The plan
+holds the argument. Two items conflict with `PLAN.md` and wait on the
+owner. Client capabilities were considered and left declined (item 86).*
+
+127. **A public tool middleware chain (plan 1b). Gated on the owner amending
+     `PLAN.md` §17.** §17 says "Do not create a large tool middleware
+     system" and "Do not create parallel harness-specific tool abstractions."
+     - The case: convert the toolkit once at the edge into an owned,
+       `Tools`-typed representation, with each stage a
+       `(call, next) => Effect`.
+     - Durable journaling, test counting and redaction become middleware, not
+       casts over a closed type. 17 of the 24 inventoried erasing casts come
+       from wrapping or merging Effect AI's closed toolkit and model types.
+     - Needs a spike to show that the owned representation retires those
+       casts, and rules for the order of permission relative to middleware
+       that rewrites arguments.
+
+     Large.
+
+     ```text
+     verify: grep "Do not create a large tool middleware system." PLAN.md
+     verify: grep "as unknown as Toolkit.WithHandler<Tools>[\"handle\"]" src/durable/DurableToolkit.ts
+     ```
+
+131. **Version the core apart from experimental subpaths (plan 6). Gated on
+     the owner's release plans; decide before 1.0.** One package, one
+     version, 53 import subpaths, most labelled experimental, so the "core"
+     label carries no semver promise of its own.
+
+     ```text
+     verify: no-grep "\"workspaces\"" package.json
+     ```
+
+### Messaging, monitors and supervision — 2026-09-26 — [plan-supervision.md](./plan-supervision.md)
+
+*The owner asked for `effect-agent`'s messaging, and OTP-style supervision
+over it. §2 (peer messaging), §3 (monitors, item 136) and the first slice of
+§4 (the in-process supervisor, item 137) and §4.1 (an agent as supervisor,
+items 139 and 140) landed the same day and are in the ledger.*
+
+141. **`rewind` restarts, gated on a use (plan §4.1).** A restart that
+     branches a task from its last good node through `/tree`, rather than
+     starting fresh or asking the same session again. It waits for a
+     supervised task whose failed attempt leaves history worth keeping up
+     to a point, which neither `fresh` nor `resubmit` serves.
+
+     ```text
+     verify: no-grep "rewind" src/sessions/Supervisor.ts
+     ```
+
 ### The next milestone (2026-09-06) — [plan-next-milestone.md](./plan-next-milestone.md)
 
 *Available usage and release work. The owner declined the proposed feature

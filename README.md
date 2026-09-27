@@ -190,7 +190,8 @@ ceilings through the loop · `/model` — context window, modalities and cost
 per model · `/evals` · `/observability` · `/redaction` · `/data` · `/hooks` ·
 `/scheduling` · `/tree` — sessions as a branchable tree · `/sessions` — a
 session's events folded into current state, and a paginated directory over
-every session (memory or SQL) kept current from the host's events · `/export` — snapshot envelope
+every session (memory or SQL) kept current from the host's events, and
+messages between sessions over routes · `/export` — snapshot envelope
 and JSONL commit log · `/blob` (`/blob/fs`) — content-addressed blob storage ·
 `/plugins` — Agent Plugins packages over `/skills` + `/mcp` · `/presets` —
 `Presets.coding` and `Presets.gateway`, composition and defaults only; `Presets.policy`, a run's bounds as one record that expands to the loop and layer.
@@ -278,11 +279,12 @@ the subpaths marked experimental above as the fastest-moving surface.
 ## Runtimes
 
 The package declares no Node engine requirement, because it has none. Every
-entry except `/sandbox/local` and `/blob/fs` reaches the host only through
-Effect's platform services (`SqlClient`, `HttpServer`, `HttpClient`, …), and
-the application supplies the concrete Layer for Node, Bun, Deno or an edge
-runtime. The two host entries live at their own paths so importing the
-portable surface never loads them.
+entry except `/sandbox/local`, `/blob/fs` and `/cloudflare` reaches the host
+only through Effect's platform services (`SqlClient`, `HttpServer`,
+`HttpClient`, …), and the application supplies the concrete Layer for Node,
+Bun, Deno or an edge runtime. The three host entries live at their own paths,
+so importing the portable surface never loads them. `/cloudflare` is the
+Durable Object host, on `effect-cf`.
 
 This is verified, not promised: `npm run lint:portability` rejects host
 coupling in portable source, and `npm run verify:package` imports every entry

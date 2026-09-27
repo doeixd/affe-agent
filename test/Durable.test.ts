@@ -15,6 +15,9 @@ import { ExecutionPlan } from "effect"
 import * as DurableAgent from "../src/durable/DurableAgent.js"
 import * as DurableChannels from "../src/durable/DurableChannels.js"
 import * as DurableElicitation from "../src/durable/DurableElicitation.js"
+import * as DurableAgentClient from "../src/durable/DurableAgentClient.js"
+import * as DurableSessionStore from "../src/durable/DurableSessionStore.js"
+import { AgentClient } from "../src/client/index.js"
 import * as FakeModel from "./FakeModel.js"
 import { countingModel } from "./helpers.js"
 
@@ -1385,51 +1388,79 @@ describe("compaction under durability", () => {
   )
 
   /**
-   * R37 -- a plan and durability cannot both own the model call.
+   * R37, revised by item 129 slice 2 -- a plan and durability both touch the
+   * model call.
    *
-   * `DurableModel` wraps the ambient `LanguageModel` so a completed call is
-   * journalled and a replay returns the recorded response rather than calling
-   * the provider again. An `ExecutionPlan` step *provides its own*
-   * `LanguageModel`, and `AgentTurn` applies the plan directly around the
-   * model call -- so the plan's layer shadows the wrapper, the provider is
-   * reached outside the journal, and a replay repeats a call that has already
-   * been made and billed.
-   *
-   * There is no way to wrap the steps of a plan built elsewhere, so the
-   * choice is between silently losing the durability guarantee and refusing
-   * loudly. Only one of those is something an operator can act on.
+   * `DurableModel` wraps the ambient `LanguageModel`; an `ExecutionPlan` step
+   * provides its own, which shadows the wrapper. A call under a plan is
+   * therefore committed whole through `Journal.modelCall` or
+   * `Journal.modelStream`, which the durable body backs with the model's
+   * codec.
    */
-  it.live("a durable agent carrying an execution plan is refused", () =>
+  it.live("a durable agent runs a batch call through its execution plan", () =>
     Effect.gen(function* () {
-      const { layer: modelLayer } = yield* FakeModel.layer([{ text: "done" }])
+      const { layer: modelLayer } = yield* FakeModel.layer([{ text: "from the ambient model" }])
       const store = yield* DurableChannels.memoryStore
       const { layer: stepLayer } = yield* FakeModel.layer([{ text: "from the plan" }])
-
       const Planned = Agent.make({ instructions: "Be brief." }).pipe(
         Agent.withExecutionPlan(ExecutionPlan.make({ provide: stepLayer }))
       )
-      const durable = DurableAgent.workflow("Planned", Planned, { store })
+      const durable = DurableAgent.workflow("PlannedBatch", Planned, { store })
+      const exit = yield* Effect.gen(function* () {
+        const executionId = yield* DurableAgent.submit(durable, store, "planned-batch-1", "hello")
+        return yield* DurableAgent.result(durable, executionId)
+      }).pipe(Effect.provide(durable.layer.pipe(Layer.provideMerge(Engine), Layer.provideMerge(modelLayer))))
+      assert.deepStrictEqual(exit, Exit.succeed("from the plan"))
+    })
+  )
 
-      const outcome = yield* Effect.exit(
-        Effect.gen(function* () {
-          const executionId = yield* DurableAgent.submit(durable, store, "planned-1", "hello")
-          return yield* DurableAgent.result(durable, executionId)
-        }).pipe(
-          Effect.provide(
-            durable.layer.pipe(
-              Layer.provideMerge(Engine),
-              Layer.provideMerge(modelLayer)
-            )
-          )
+  it.live("a durable agent streams through its execution plan too", () =>
+    Effect.gen(function* () {
+      const { layer: modelLayer } = yield* FakeModel.layer([{ text: "from the ambient model" }])
+      const store = yield* DurableChannels.memoryStore
+      const { layer: stepLayer } = yield* FakeModel.layer([{ text: "from the plan" }])
+      const Planned = Agent.make({ instructions: "Be brief." }).pipe(
+        Agent.withExecutionPlan(ExecutionPlan.make({ provide: stepLayer }))
+      )
+      const durable = DurableAgent.workflow("PlannedStream", Planned, { store, stream: true })
+      const exit = yield* Effect.gen(function* () {
+        const executionId = yield* DurableAgent.submit(durable, store, "planned-stream-1", "hello")
+        return yield* DurableAgent.result(durable, executionId)
+      }).pipe(Effect.provide(durable.layer.pipe(Layer.provideMerge(Engine), Layer.provideMerge(modelLayer))))
+      assert.deepStrictEqual(exit, Exit.succeed("from the plan"))
+    })
+  )
+
+  /**
+   * Under `DurableAgentClient`, the other workflow body. It had no refusal
+   * at all until the two bodies shared one assembly, so an agent with a plan
+   * ran there with its provider calls outside the journal. Now both bodies
+   * commit the plan's ladder, and the client's live stream still delivers
+   * the plan's text as it arrives.
+   */
+  it.live("the durable client runs an execution plan, batch and streamed, and leaves the session idle", () =>
+    Effect.gen(function* () {
+      const store = yield* DurableChannels.memoryStore
+      const sessionStore = yield* DurableSessionStore.memoryStore
+      const { layer: modelLayer } = yield* FakeModel.layer([{ text: "from the ambient model" }])
+      const { layer: stepLayer } = yield* FakeModel.layer([{ text: "from the plan" }, { text: "from the plan again" }])
+      const Planned = Agent.make({ instructions: "Be brief." }).pipe(
+        Agent.withExecutionPlan(ExecutionPlan.make({ provide: stepLayer }))
+      )
+      const runtime = yield* Layer.build(
+        DurableAgentClient.layer("PlannedClient", Planned, { store, sessionStore }).pipe(
+          Layer.provideMerge(Engine),
+          Layer.provideMerge(modelLayer)
         )
       )
-
-      // However the workflow surfaces it, the run does not quietly succeed
-      // with the journal bypassed.
-      const reported = Exit.isFailure(outcome)
-        ? String(outcome.cause)
-        : String(outcome.value)
-      assert.include(reported, "ExecutionPlan")
-    })
+      yield* Effect.gen(function* () {
+        const client = yield* AgentClient.AgentClient
+        const session = yield* client.createSession()
+        assert.strictEqual((yield* session.prompt("hello", { stream: true })).text, "from the plan")
+        assert.strictEqual((yield* session.prompt("again")).text, "from the plan again")
+        const record = yield* sessionStore.get(session.id)
+        assert.isTrue(Option.isSome(record) && Option.isNone(record.value.claim), "a finished submission left the session claimed")
+      }).pipe(Effect.provide(runtime))
+    }).pipe(Effect.scoped)
   )
 })

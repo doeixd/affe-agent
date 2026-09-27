@@ -144,6 +144,12 @@ so nobody goes looking for it in a plan.
 
 ## Interaction with `/durable`
 
+**Built 2026-09-27 (item 129, slice 2).** The kernel hands a call under a plan
+to `Journal.modelCall`, or `Journal.modelStream` when it streams, and
+`/durable` journals the whole ladder as one activity through `DurableModel`'s
+codec: the design this section describes. A streamed ladder's parts still
+reach the session live on the first run.
+
 A durable run journals each model call as an activity (`DurableModel`), and the
 journal records the **outcome**, not the path taken to it. So a plan that
 falls back on the first execution and is replayed later replays the recorded

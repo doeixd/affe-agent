@@ -6,6 +6,9 @@ import * as AgentEvent from "../src/AgentEvent.js"
 import * as AgentSession from "../src/AgentSession.js"
 import * as ToolExecution from "../src/ToolExecution.js"
 import * as ToolScheduling from "../src/ToolScheduling.js"
+import { CodeTool } from "../src/code/index.js"
+import { Subagent } from "../src/subagent/index.js"
+import * as FakeModel from "./FakeModel.js"
 import { withSession } from "./helpers.js"
 
 /**
@@ -54,6 +57,15 @@ const batch = [
   },
   { text: "done" }
 ]
+
+/** A scheduling that constrains nothing and records the name of every call it holds. */
+const recorder = Effect.map(Ref.make<ReadonlyArray<string>>([]), (names) => ({
+  scheduling: {
+    around: (call) => (run) => Effect.andThen(Ref.update(names, (seen) => [...seen, call.name]), run),
+    description: { _tag: "Unconstrained" }
+  } satisfies ToolScheduling.ToolScheduling,
+  names: Ref.get(names)
+}))
 
 const rooms = ToolScheduling.serialize("rooms", (call) => call.name === "book_room" ? "rooms" : undefined)
 
@@ -128,6 +140,101 @@ describe("ToolScheduling (item 105)", () => {
         ToolScheduling.all(rooms, ToolScheduling.maxConcurrent(1)).description,
         { _tag: "All", schedulings: [{ _tag: "Serialize", name: "rooms" }, { _tag: "MaxConcurrent", max: 1 }] }
       )
+    }))
+
+  it.live("a subagent under maxConcurrent(1) finishes: the delegating call holds no permit, its child's calls do", () =>
+    Effect.gen(function*() {
+      // Before `Container`, the `research` call held the only permit while
+      // its child's `read` waited for it: a deadlock, not a slow run.
+      const { scheduling, names } = yield* recorder
+      const child = yield* FakeModel.layer([
+        { toolCalls: [{ id: "c1", name: "read", params: { path: "x" } }] },
+        { text: "child done" }
+      ])
+      const research = Subagent.tool(
+        "research",
+        Agent.make({ tools: [Agent.tool(Read, ({ path }) => Effect.succeed(`read ${path}`))] }),
+        { description: "Delegate research.", provide: child.layer }
+      )
+      const { value } = yield* withSession(
+        [{ toolCalls: [{ id: "r1", name: "research", params: { prompt: "look" } }] }, { text: "parent done" }],
+        Agent.make({ tools: [research] }),
+        ({ session }) => AgentSession.prompt(session, "go")
+      ).pipe(
+        Effect.provide(ToolScheduling.layer(ToolScheduling.all(scheduling, ToolScheduling.maxConcurrent(1)))),
+        Effect.timeoutOrElse({
+          duration: "3 seconds",
+          orElse: () => Effect.die("the delegating call held the permit its child's call needed")
+        })
+      )
+      assert.strictEqual(value.text, "parent done")
+      // The child's call was scheduled; the delegation that waits on it was not.
+      assert.deepStrictEqual(yield* names, ["read"])
+    }))
+
+  it.live("a subagent called from code mode is a container there too: no deadlock under maxConcurrent(1)", () =>
+    Effect.gen(function*() {
+      const { scheduling, names } = yield* recorder
+      const child = yield* FakeModel.layer([
+        { toolCalls: [{ id: "c1", name: "read", params: { path: "x" } }] },
+        { text: "child done" }
+      ])
+      const research = Subagent.tool(
+        "research",
+        Agent.make({ tools: [Agent.tool(Read, ({ path }) => Effect.succeed(`read ${path}`))] }),
+        { description: "Delegate research.", provide: child.layer }
+      )
+      const bound = yield* CodeTool.tool({
+        tools: { team: yield* Agent.toolkit([research.tool], { research: research.handler }) }
+      })
+      const program = "const answer = await tools.team.research({ prompt: \"look\" })\nreturn answer.ok"
+      yield* withSession(
+        [{ toolCalls: [{ id: "e1", name: "execute", params: { program } }] }, { text: "done" }],
+        Agent.make({ tools: [bound] }),
+        ({ session }) => AgentSession.prompt(session, "go")
+      ).pipe(
+        Effect.provide(ToolScheduling.layer(ToolScheduling.all(scheduling, ToolScheduling.maxConcurrent(1)))),
+        Effect.timeoutOrElse({
+          duration: "3 seconds",
+          orElse: () => Effect.die("the nested subagent call held the permit its child's call needed")
+        })
+      )
+      // Only the leaf was scheduled: neither `execute` nor the delegation.
+      assert.deepStrictEqual(yield* names, ["read"])
+    }))
+
+  it.live("code mode's nested calls are scheduled like direct ones, and the execute call is not", () =>
+    Effect.gen(function*() {
+      const { busy, read } = yield* meter
+      const { scheduling, names } = yield* recorder
+      const bound = yield* CodeTool.tool({
+        tools: {
+          rooms: yield* Agent.toolkit([BookRoom], { book_room: ({ room }) => Effect.as(busy(true), `booked ${room}`) })
+        }
+      })
+      const program = [
+        "const both = await Promise.all([tools.rooms.book_room({ room: \"a\" }), tools.rooms.book_room({ room: \"b\" })])",
+        "return both.length"
+      ].join("\n")
+      const { events } = yield* withSession(
+        [{ toolCalls: [{ id: "c1", name: "execute", params: { program } }] }, { text: "done" }],
+        Agent.make({ tools: [bound] }),
+        ({ session }) => AgentSession.prompt(session, "go")
+      ).pipe(
+        // `maxConcurrent(1)` as well: were `execute` to hold a permit, its
+        // nested calls could never take one.
+        Effect.provide(ToolScheduling.layer(ToolScheduling.all(scheduling, rooms, ToolScheduling.maxConcurrent(1)))),
+        Effect.timeoutOrElse({
+          duration: "3 seconds",
+          orElse: () => Effect.die("the execute call held the permit its nested calls needed")
+        })
+      )
+      const seen = yield* read
+      assert.strictEqual(seen.maxRooms, 1, "two nested bookings overlapped: the host's serialize was bypassed")
+      assert.deepStrictEqual(yield* names, ["book_room", "book_room"])
+      const succeeded = events.filter(AgentEvent.is("ToolCallSucceeded"))
+      assert.strictEqual(succeeded.length, 1)
+      assert.propertyVal(succeeded[0]!.event.result, "value", 2)
     }))
 
   it("maxConcurrent refuses a limit that would wait forever", () => {

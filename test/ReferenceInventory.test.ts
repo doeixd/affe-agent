@@ -47,6 +47,14 @@ const classified: Record<string, { readonly class: Class; readonly why: string }
     class: "no-feature",
     why: "a tool annotation: none means an ordinary tool, which runs as an activity as before"
   },
+  "src/durable/DurableToolkit.ts:OnUnknownOutcome": {
+    class: "no-feature",
+    why: "a tool annotation: none means an unknown outcome ends the run, as it always has"
+  },
+  "src/Journal.ts:Journal": {
+    class: "seam",
+    why: "the identity journal: a step runs and nothing is recorded, which is what a run that is not durable wants"
+  },
   "src/internal/failpoint.ts:Failpoint": {
     class: "seam",
     why: "no-op outside the crash tests"
@@ -66,6 +74,14 @@ const classified: Record<string, { readonly class: Class; readonly why: string }
   "src/internal/currentSession.ts:CurrentSessionId": {
     class: "no-feature",
     why: "outside a session: nothing session-scoped is reachable"
+  },
+  "src/sessions/Supervisor.ts:CurrentChild": {
+    class: "no-feature",
+    why: "outside a supervisor: a task runs as a fresh task with no one to tell"
+  },
+  "src/ToolScheduling.ts:Container": {
+    class: "no-feature",
+    why: "a tool annotation: none means an ordinary call, which the host's scheduling holds as before"
   },
   "src/ToolExecution.ts:Alone": {
     class: "no-feature",

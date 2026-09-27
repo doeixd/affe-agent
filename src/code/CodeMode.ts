@@ -530,86 +530,66 @@ export const make = <Groups extends ToolGroups, R = never>(
             )
           }
 
-          // Invariant 2: the same permission decision a direct call gets.
+          // Invariant 2: the same permission stages a direct call passes, in
+          // the same function (`ToolExecution.authorize`, item 126): the
+          // decision, the floor, the question, and a remembered grant.
           //
           // The second inventoried cast (AGENTS.md, `test/Casts.test.ts`):
-          // `ToolExecution.decide` is an `Effect.fn`, and under this
+          // `ToolExecution.authorize` is an `Effect.fn`, and under this
           // instantiation its generic requirement collapses to `unknown`.
           // The only requirement-carrying input is `policy`, typed
           // `Permission.Policy<R>`, so `R` is the truth the wrapper lost.
-          const decided = yield* (ToolExecution.decide(tool, {
+          const elicitor = options.elicitor
+          const authorized = yield* (ToolExecution.authorize(tool, {
             id: `code-${callCount}`,
             name: tool.name,
             params: inputData.success
           }, {
             sessionId: "code-mode",
             messages: [],
-            permission: policy
-          }).pipe(Effect.orDie) as unknown as Effect.Effect<
-            | { readonly _tag: "InvalidParameters" }
-            | {
-              readonly _tag: "Decided"
-              readonly decision: Permission.Decision
-              readonly request: Permission.Request
-            },
-            never,
-            R
-          >)
+            permission: policy,
+            ask: elicitor === undefined ? Option.none() : Option.some<ToolExecution.Ask<never>>((detail) =>
+              Effect.gen(function*() {
+                approvalCount += 1
+                const id = `${prefix}-approval-${approvalCount}`
+                // Announced *after* the request registers and before the
+                // wait -- the ordering `Elicitor.elicit` documents, and the
+                // reason the announcement is passed rather than emitted here.
+                return yield* elicitor.elicit(
+                  { id, kind: "tool-approval", detail: encodeApproval(detail) },
+                  runOptions?.onApproval === undefined
+                    ? Effect.void
+                    : runOptions.onApproval({ id, path, detail })
+                )
+              }))
+          }).pipe(Effect.orDie) as unknown as Effect.Effect<ToolExecution.Authorization, never, R>)
 
-          if (decided._tag === "Decided") {
-            const decision = decided.decision
-            if (decision._tag === "Deny") {
-              // The executor split: a policy refusal throws into the
-              // program -- it must not be ignorable on the happy path.
-              return yield* rethrow(
-                new ProgramThrow({
-                  value: {
-                    message: `permission denied for ${tool.name}${decision.reason === undefined ? "" : `: ${decision.reason}`}`
-                  }
-                })
-              )
-            }
-            if (decision._tag === "Ask") {
-              if (options.elicitor === undefined) {
-                return yield* rethrow(
-                  new ProgramThrow({
-                    value: {
-                      message: `${tool.name} requires approval and this runtime has no elicitor; call the tool directly`
-                    }
-                  })
-                )
-              }
-              approvalCount += 1
-              const id = `${prefix}-approval-${approvalCount}`
-              const detail: Permission.ApprovalDetail = {
-                toolName: tool.name,
-                toolCallId: `code-${callCount}`,
-                action: decided.request.action,
-                resource: decided.request.resource,
-                ...(decided.request.subject === undefined
-                  ? {}
-                  : { subject: decided.request.subject }),
-                ...(decision.reason === undefined ? {} : { reason: decision.reason })
-              }
-              // Announced *after* the request registers and before the
-              // wait -- the ordering `Elicitor.elicit` documents, and the
-              // reason the announcement is passed rather than emitted here.
-              const answer = yield* options.elicitor.elicit(
-                { id, kind: "tool-approval", detail: encodeApproval(detail) },
-                runOptions?.onApproval === undefined
-                  ? Effect.void
-                  : runOptions.onApproval({ id, path, detail })
-              )
-              if (!answer.granted) {
-                // The executor split, again: a refused approval throws.
-                // A program must not be able to ignore it on the happy path.
-                return yield* rethrow(
-                  new ProgramThrow({
-                    value: { message: `approval refused for ${tool.name}` }
-                  })
-                )
-              }
-            }
+          // The executor split: a refusal throws into the program -- it must
+          // not be ignorable on the happy path.
+          if (authorized._tag === "Denied") {
+            return yield* rethrow(
+              new ProgramThrow({
+                value: {
+                  message: `permission denied for ${tool.name}${
+                    Option.isNone(authorized.reason) ? "" : `: ${authorized.reason.value}`
+                  }`
+                }
+              })
+            )
+          }
+          if (authorized._tag === "Unaskable") {
+            return yield* rethrow(
+              new ProgramThrow({
+                value: {
+                  message: `${tool.name} requires approval and this runtime has no elicitor; call the tool directly`
+                }
+              })
+            )
+          }
+          if (authorized._tag === "Refused") {
+            return yield* rethrow(
+              new ProgramThrow({ value: { message: `approval refused for ${tool.name}` } })
+            )
           }
 
           /**
@@ -622,8 +602,13 @@ export const make = <Groups extends ToolGroups, R = never>(
            * `ServicesOf<Groups>`, which `execute` already declares and the
            * caller already provides.
            */
-          started = true
-          const drained = group.handle(name, inputData.success).pipe(
+          // `started` is set when the handler begins, inside the host's
+          // scheduling: a call still queued there when interrupted did not
+          // start, and reports `not-started`, not `uncertain`.
+          const drained = Effect.suspend(() => {
+            started = true
+            return group.handle(name, inputData.success)
+          }).pipe(
             Effect.flatMap((stream) => Stream.runCollect(stream)),
             Effect.map((results) => {
               const all = Array.from(results)
@@ -635,7 +620,14 @@ export const make = <Groups extends ToolGroups, R = never>(
             unknown,
             ServicesOf<Groups>
           >
-          const handled = yield* Effect.result(drained)
+          // The handler, not the approval wait above: a program parked on a
+          // question holds no lock another session's call is queued behind.
+          // A container (a subagent, a nested `execute`) is not held here
+          // either: its own nested calls are, and holding both deadlocks, as
+          // `ToolScheduling.Container` explains.
+          const handled = yield* Effect.result(
+            ToolExecution.scheduled(tool, { name: tool.name, params: inputData.success })(drained)
+          )
 
           if (Result.isFailure(handled)) {
             // A tool's declared failure is a value the program branches

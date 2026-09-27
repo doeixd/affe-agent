@@ -22,6 +22,11 @@ import * as TestLanguageModel from "./TestLanguageModel.js"
  * the injected-statement test `test/DurableSessionStore.test.ts` keeps for
  * the SQL store.
  *
+ * **The second tier is `DurableEquivalence.sweep`.** This suite checks
+ * each operation's contract. The sweep checks that the store, under the
+ * real engine, carries a run across a process lost at each boundary. Pass
+ * it through `Options.stores` (item 134).
+ *
  * Framework-agnostic, as `SandboxConformance` is: a case is a named Effect,
  * a runner wires them with one line each, and `run` reports.
  */

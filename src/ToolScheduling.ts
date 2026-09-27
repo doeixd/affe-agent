@@ -62,6 +62,24 @@ export const Current = Context.Reference<ToolScheduling>(Namespace.tag("ToolSche
   defaultValue: () => unconstrained
 })
 
+/**
+ * A tool whose work is other tool calls: `/code`'s `execute` and the
+ * subagent tools, which wait on a child session.
+ *
+ * The host's scheduling holds back the calls that do work, so it skips a
+ * container call and holds its nested calls instead, each as it would a
+ * direct one. Holding both would deadlock: under `maxConcurrent(1)` the
+ * container would keep the only permit while its first nested call waited
+ * for it. A container therefore cannot be serialized by name; its nested
+ * calls are.
+ *
+ * `false` by default. Set it with
+ * `Tool.make(...).annotate(ToolScheduling.Container, true)`.
+ */
+export const Container = Context.Reference<boolean>(Namespace.tag("ToolScheduling/Container"), {
+  defaultValue: () => false
+})
+
 /** Provide a scheduling to everything built on this layer. */
 export const layer = (scheduling: ToolScheduling): Layer.Layer<never> => Layer.succeed(Current, scheduling)
 

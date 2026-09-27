@@ -18,12 +18,13 @@
  * has been undone, and either way the text has to change before the build
  * goes green. That is the point -- the doc cannot quietly lie about the code.
  *
- * Three files are scanned: the live list, its ledger
- * (`remaining-work-closed.md`) and `STATUS.md`. A closed entry keeps its
- * `verify:` lines when it moves, and there they pin the work as *done* -- an
- * undone fix fails the build from the ledger exactly as unlanded work fails
- * it from the list; and `STATUS.md`'s "what ships" carries pins for the
- * mechanisms it names.
+ * Four files are scanned: the live list, its ledger
+ * (`remaining-work-closed.md`), `STATUS.md` and `docs/architecture.md`. A
+ * closed entry keeps its `verify:` lines when it moves, and there they pin the
+ * work as *done* -- an undone fix fails the build from the ledger exactly as
+ * unlanded work fails it from the list; `STATUS.md`'s "what ships" carries
+ * pins for the mechanisms it names; and the architecture document pins the
+ * mechanisms and tests its sections describe.
  *
  * Deliberately a four-verb literal DSL rather than shell: `npm run check`
  * runs on Windows, and a check that only fires where `sh` is on the path is a
@@ -38,7 +39,7 @@ import * as path from "node:path"
 import { fileURLToPath } from "node:url"
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
-const docs = ["docs/remaining-work.md", "docs/remaining-work-closed.md", "STATUS.md"]
+const docs = ["docs/remaining-work.md", "docs/remaining-work-closed.md", "STATUS.md", "docs/architecture.md"]
 
 // `verify: <verb> ["literal"] <path>`. The literal is quoted so it may hold
 // spaces; the path is one token.

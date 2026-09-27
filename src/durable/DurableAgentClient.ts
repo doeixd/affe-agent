@@ -22,6 +22,7 @@ import * as DurablePolling from "./DurablePolling.js"
 import * as DeliveryLog from "./DeliveryLog.js"
 import * as DurableSubmission from "./DurableSubmission.js"
 import * as DurableSessionStore from "./DurableSessionStore.js"
+import * as Recovery from "./Recovery.js"
 import * as Schedules from "../internal/schedules.js"
 import type { StorageError } from "../Errors.js"
 
@@ -360,54 +361,62 @@ export const layer = <Tools extends Record<string, Tool.Any>, Value, Input>(
     Effect.gen(function* () {
       if (Option.isNone(record.claim)) return
       const claim = record.claim.value
-      if (claim.executionId === undefined) {
-        const history = yield* DurableSessionStore.decodeHistory(record.history)
-        yield* dispatch(record.sessionId, claim, history)
-      } else if (yield* hasEnded(record.sessionId)) {
-        /**
-         * A claim whose submission has already ended.
-         *
-         * `finishProjection` clears the admission and interrupt channels and
-         * then finishes the claim. Those are two stores, so they are one
-         * `Activity` but not one transaction, and if the finish fails the
-         * catch path retries it and can fail the same way. The workflow then
-         * ends -- terminally, with a failure exit -- while the claim is still
-         * `running`. Admission is closed, nothing is executing, and every
-         * later prompt is refused as `Busy`. Permanently: the wedge had no
-         * exit, because reconciliation only ever looked for a claim that had
-         * never been dispatched.
-         *
-         * A claim whose submission has ended is finishable by anyone, so the
-         * reacquiring client does it. What it cannot recover is the
-         * conversation that submission produced: the write that would have
-         * committed the history is the one that failed, and no other copy of
-         * it is durable. Canonical history therefore stays where the
-         * submission began -- the turn leaves no trace, which is what a failed
-         * submission should look like, and is the honest best available.
-         *
-         * Safe against a `finishProjection` still in flight, because `finish`
-         * only matches a claim whose stored text is unchanged. Whichever
-         * arrives second finds the claim gone and reports `false`, so this
-         * cannot erase a finish that succeeded or a claim that has moved on.
-         *
-         * The residual is narrow and worth naming: an acquisition landing
-         * *between* that activity's clear and its finish will free the claim
-         * first, and the history the workflow was about to commit is lost. It
-         * was never durable, so nothing is overwritten that had been
-         * promised -- but the turn is discarded where it might have survived.
-         */
-        const history = yield* DurableSessionStore.decodeHistory(record.history)
-        yield* options.sessionStore.finish(
-          record.sessionId,
-          claim.submissionId,
-          history
-        )
-        return
+      // What is owed is `Recovery.classify`'s to decide, from the same
+      // evidence an operator's `Recovery.inspect` reads. The record was just
+      // read by the caller, so it is not read again.
+      const evidence = yield* Recovery.evidenceFor(options, record.sessionId, Option.some(record))
+      const decision = Recovery.classify(evidence)
+      switch (decision._tag) {
+        case "Missing":
+        case "Idle":
+        case "Running":
+          return
+        case "Dispatch": {
+          const history = yield* DurableSessionStore.decodeHistory(record.history)
+          yield* dispatch(record.sessionId, claim, history)
+          return
+        }
+        case "FinishEnded": {
+          /**
+           * A claim whose submission has already ended.
+           *
+           * `finishProjection` clears the admission and interrupt channels and
+           * then finishes the claim. Those are two stores, so they are one
+           * `Activity` but not one transaction, and if the finish fails the
+           * catch path retries it and can fail the same way. The workflow then
+           * ends -- terminally, with a failure exit -- while the claim is still
+           * `running`. Admission is closed, nothing is executing, and every
+           * later prompt is refused as `Busy`. Permanently: the wedge had no
+           * exit, because reconciliation only ever looked for a claim that had
+           * never been dispatched.
+           *
+           * A claim whose submission has ended is finishable by anyone, so the
+           * reacquiring client does it. What it cannot recover is the
+           * conversation that submission produced: the write that would have
+           * committed the history is the one that failed, and no other copy of
+           * it is durable. Canonical history therefore stays where the
+           * submission began -- the turn leaves no trace, which is what a failed
+           * submission should look like, and is the honest best available.
+           *
+           * Safe against a `finishProjection` still in flight, because `finish`
+           * only matches a claim whose stored text is unchanged. Whichever
+           * arrives second finds the claim gone and reports `false`, so this
+           * cannot erase a finish that succeeded or a claim that has moved on.
+           *
+           * The residual is narrow and worth naming: an acquisition landing
+           * *between* that activity's clear and its finish will free the claim
+           * first, and the history the workflow was about to commit is lost. It
+           * was never durable, so nothing is overwritten that had been
+           * promised -- but the turn is discarded where it might have survived.
+           */
+          const history = yield* DurableSessionStore.decodeHistory(record.history)
+          yield* options.sessionStore.finish(record.sessionId, claim.submissionId, history)
+          return
+        }
+        case "DeliverAnswers":
+          yield* Effect.forEach(evidence.answers, (answer) => deliverAnswer(record.sessionId, claim, answer))
+          return
       }
-      const answers = yield* options.sessionStore.recordedAnswers(record.sessionId)
-      yield* Effect.forEach(answers, (answer) =>
-        deliverAnswer(record.sessionId, claim, answer)
-      )
     })
 
   const makeRemoteSession = (

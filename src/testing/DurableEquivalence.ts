@@ -1,9 +1,12 @@
 import { Crypto, Deferred, Duration, Effect, Layer, Option, Ref, Schedule, Schema } from "effect"
 import type { Scope } from "effect"
-import type { LanguageModel, Prompt, Tool } from "effect/unstable/ai"
+import { Tool } from "effect/unstable/ai"
+import type { LanguageModel, Prompt } from "effect/unstable/ai"
 import { ClusterWorkflowEngine, SingleRunner } from "effect/unstable/cluster"
 import type { SqlClient } from "effect/unstable/sql"
+import * as Agent from "../Agent.js"
 import type { AgentDefinition } from "../Agent.js"
+import * as AgentLoop from "../AgentLoop.js"
 import type * as Elicitation from "../Elicitation.js"
 import * as PromptWire from "../PromptWire.js"
 import * as RunLedger from "../RunLedger.js"
@@ -15,6 +18,7 @@ import * as DurableChannels from "../durable/DurableChannels.js"
 import * as DurableSessionStore from "../durable/DurableSessionStore.js"
 import { Failpoint } from "../internal/failpoint.js"
 import { turnFailpoints } from "../internal/turnFailpoints.js"
+import { deepEqual } from "./internal/conformance.js"
 import * as TestLanguageModel from "./TestLanguageModel.js"
 
 /**
@@ -140,6 +144,33 @@ export interface Options {
    * contends for the lock.
    */
   readonly lockExpiration?: Duration.Input | undefined
+  /**
+   * Stores of your own in place of the SQL ones, for certifying them (item
+   * 134). Whatever is left out stays the SQL store over `database`.
+   *
+   * Two levels, because a run has two processes over one backing. The outer
+   * effect runs once per run, in the run's scope, as `database` does: build
+   * a fresh backing there. The function it returns is called once per
+   * process, with that process's connection provided and in its scope: hand
+   * each process its view of that one backing. For an in-memory store, that
+   * is the same instance both times:
+   *
+   * ```ts
+   * stores: Effect.map(DurableSessionStore.memoryStore, (sessionStore) => () => Effect.succeed({ sessionStore }))
+   * ```
+   *
+   * The workflow journal is always the SQL one over `database`.
+   */
+  readonly stores?:
+    | Effect.Effect<(process: Process) => Effect.Effect<Stores, unknown, SqlClient.SqlClient | Scope.Scope>, unknown, Scope.Scope>
+    | undefined
+}
+
+/** The stores `Options.stores` can replace. */
+export interface Stores {
+  readonly channels?: DurableChannels.Store | undefined
+  readonly sessionStore?: DurableSessionStore.DurableSessionStore | undefined
+  readonly delivery?: DeliveryLog.DeliveryLog | undefined
 }
 
 /** What is compared. Everything here is meant to be deterministic. */
@@ -240,14 +271,18 @@ const processOver = <Tools extends Record<string, Tool.Any>, Value, Input>(
   effects: Effects,
   lockExpiration: Duration.Input,
   process: Process,
+  own: Option.Option<(process: Process) => Effect.Effect<Stores, unknown, SqlClient.SqlClient | Scope.Scope>>,
   park?: Park
 ) =>
   Effect.gen(function*() {
     const connection = yield* Layer.build(sql)
+    const replaced: Stores = Option.isNone(own) ? {} : yield* Effect.orDie(own.value(process)).pipe(Effect.provide(connection))
     const stores = yield* Effect.all({
-      store: DurableChannels.sqlStoreWithTable(),
-      sessionStore: DurableSessionStore.sqlStoreWithTables(),
-      delivery: DeliveryLog.sqlLogWithTable()
+      store: replaced.channels === undefined ? DurableChannels.sqlStoreWithTable() : Effect.succeed(replaced.channels),
+      sessionStore: replaced.sessionStore === undefined
+        ? DurableSessionStore.sqlStoreWithTables()
+        : Effect.succeed(replaced.sessionStore),
+      delivery: replaced.delivery === undefined ? DeliveryLog.sqlLogWithTable() : Effect.succeed(replaced.delivery)
     }).pipe(Effect.provide(connection))
     const scripted = yield* TestLanguageModel.script(scenario.turns, { select: scenario.select ?? "history" })
     const model = scenario.model ?? scripted.layer
@@ -334,6 +369,10 @@ const observe = (
     })
   })))
 
+/** This run's own stores, if the caller has any: built once, in the run's scope. */
+const ownStores = (options: Options) =>
+  options.stores === undefined ? Effect.succeedNone : Effect.asSome(Effect.orDie(options.stores))
+
 /** The scenario, run once, straight through, in one process. The baseline. */
 export const straight = <Tools extends Record<string, Tool.Any>, Value, Input>(
   scenario: Scenario<Tools, Value, Input>,
@@ -342,8 +381,9 @@ export const straight = <Tools extends Record<string, Tool.Any>, Value, Input>(
   Effect.scoped(
     Effect.gen(function*() {
       const sql = yield* options.database
+      const own = yield* ownStores(options)
       const { effects, recorded } = yield* recording
-      const { client, delivery, ledger, recorder, sessionStore } = yield* processOver(scenario, sql, effects, options.lockExpiration ?? "1 second", "first")
+      const { client, delivery, ledger, recorder, sessionStore } = yield* processOver(scenario, sql, effects, options.lockExpiration ?? "1 second", "first", own)
       const session = yield* client.createSession({ sessionId: SESSION })
       yield* answering(session, scenario.answer)
       for (const earlier of scenario.before ?? []) yield* session.prompt(earlier, { stream: scenario.stream ?? false })
@@ -376,6 +416,7 @@ export const crashed = <Tools extends Record<string, Tool.Any>, Value, Input>(
   Effect.scoped(
     Effect.gen(function*() {
       const sql = yield* options.database
+      const own = yield* ownStores(options)
       const { effects, recorded } = yield* recording
       const arrived = yield* Deferred.make<void>()
       const armed = yield* Ref.make(false)
@@ -385,7 +426,7 @@ export const crashed = <Tools extends Record<string, Tool.Any>, Value, Input>(
 
       const first = yield* Effect.scoped(
         Effect.gen(function*() {
-          const { client, recorder } = yield* processOver(scenario, sql, effects, lock, "first", {
+          const { client, recorder } = yield* processOver(scenario, sql, effects, lock, "first", own, {
             location: options.at,
             occurrence,
             arrived,
@@ -409,7 +450,7 @@ export const crashed = <Tools extends Record<string, Tool.Any>, Value, Input>(
 
       return yield* Effect.scoped(
         Effect.gen(function*() {
-          const { client, delivery, ledger, recorder, sessionStore } = yield* processOver(scenario, sql, effects, lock, "second")
+          const { client, delivery, ledger, recorder, sessionStore } = yield* processOver(scenario, sql, effects, lock, "second", own)
           const session = yield* client.session(SESSION)
           yield* answering(session, scenario.answer)
           // Retried: until the dead process's shard lock expires, the
@@ -441,3 +482,83 @@ export const crashed = <Tools extends Record<string, Tool.Any>, Value, Input>(
       )
     })
   )
+
+/** One boundary of a sweep: the run crashed there, finished by a second process. */
+export interface SweepRow {
+  readonly at: string
+  readonly observation: Observation
+  /** Model calls made by the first process and by the second. */
+  readonly split: readonly [number, number]
+  /** Whether `observation` is exactly the straight run's. */
+  readonly equivalent: boolean
+}
+
+/**
+ * Crash the scenario at every boundary, once each, and compare every recovery
+ * with the run that never crashed (item 134).
+ *
+ * This is the second tier of certifying a store of your own. The conformance
+ * suites (`DurableSessionStoreConformance`, `DeliveryLogConformance`) check
+ * each operation's contract. This checks that the stores, under the real
+ * engine, carry a run across a process lost between two durable writes, and
+ * come out as though nothing had happened. Pass your stores as
+ * `Options.stores`, and `certification` as the scenario unless you have a
+ * better one: it reaches every boundary.
+ *
+ * Never fails on a difference. A row that differs is the finding, and the
+ * caller asserts `rows.every((row) => row.equivalent)`. Dies, by name, if the
+ * scenario never reaches a boundary: a crash nowhere certifies nothing.
+ */
+export const sweep = <Tools extends Record<string, Tool.Any>, Value, Input>(
+  scenario: Scenario<Tools, Value, Input>,
+  options: Options & {
+    /** Which boundaries to crash at. Default all of `boundaries`. */
+    readonly at?: ReadonlyArray<string> | undefined
+    /** Per crash, as `crashed` takes it. */
+    readonly timeout?: Duration.Input | undefined
+  }
+) =>
+  Effect.gen(function*() {
+    const baseline = yield* straight(scenario, options)
+    const rows: Array<SweepRow> = []
+    for (const at of options.at ?? boundaries) {
+      const recovered = yield* crashed(scenario, { ...options, at })
+      rows.push({
+        at,
+        observation: recovered.observation,
+        split: recovered.split,
+        equivalent: deepEqual(recovered.observation, baseline)
+      })
+    }
+    return { straight: baseline, rows }
+  })
+
+const Lookup = Tool.make("lookup", {
+  parameters: Schema.Struct({ of: Schema.String }),
+  success: Schema.String
+})
+
+/**
+ * A scenario that reaches every boundary in `boundaries`. Two tool calls in
+ * one response, then an answer, so there is work on both sides of each.
+ * `sweep`'s default for certifying a store.
+ */
+export const certification = scenario({
+  agent: (effects) =>
+    Agent.make({
+      tools: [Agent.tool(Lookup, ({ of }) => Effect.as(effects.record(of), `${of}: found`))],
+      loop: AgentLoop.bounded(4)
+    }),
+  turns: [
+    {
+      text: "Looking both up.",
+      toolCalls: [
+        { id: "l1", name: "lookup", params: { of: "orders" } },
+        { id: "l2", name: "lookup", params: { of: "refunds" } }
+      ],
+      usage: { input: 120, output: 30 }
+    },
+    { text: "Both found.", usage: { input: 180, output: 12 } }
+  ],
+  prompt: "find the orders and the refunds"
+})

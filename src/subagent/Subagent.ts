@@ -14,6 +14,7 @@ import * as InputBoundary from "../internal/inputBoundary.js"
 import * as InternalToolkit from "../internal/toolkit.js"
 import * as Namespace from "../internal/namespace.js"
 import * as Telemetry from "../internal/telemetry.js"
+import * as ToolScheduling from "../ToolScheduling.js"
 
 /**
  * Subagents: ergonomics for the pattern the library already
@@ -673,12 +674,14 @@ export const tool = <Tools extends Record<string, Tool.Any>, E, R, Value, Input,
 ) => {
   refuseUnapprovable(name, agent, options.inherit)
   const admit = admission(name, options)
+  // A container: the child's calls are scheduled, so this call holds no
+  // permit while it waits on them (`ToolScheduling.Container`).
   const definition = Tool.make(name, {
     description: options.description,
     parameters: parametersOf(InputBoundary.declared(agent)),
     success: successOf<Value>(agent),
     failure: Schema.String
-  })
+  }).annotate(ToolScheduling.Container, true)
 
   const run = (params: unknown) =>
     admit(Effect.flatMap(countedBudget(options.inherit), ({ layer, report }) =>
@@ -748,7 +751,7 @@ export const toolScoped = <Tools extends Record<string, Tool.Any>, E, R, Value, 
       parameters: parametersOf(InputBoundary.declared(agent)),
       success: successOf<Value>(agent),
       failure: Schema.String
-    })
+    }).annotate(ToolScheduling.Container, true)
 
     const run = (params: unknown) =>
       admit(Effect.flatMap(countedBudget(options.inherit), ({ layer, report }) =>

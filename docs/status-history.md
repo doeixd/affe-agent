@@ -6389,3 +6389,362 @@ checked after it). The suite is green on Windows now: 2635 tests, 0 failures.
 
 This file is not part of the session's subagent work and failed identically at
 `origin/main`; it was fixed at the owner's request.
+
+## 2026-09-26 - an architecture document
+
+`docs/architecture.md` is the one place that says how the parts fit:
+- the five kinds of module and their dependency direction;
+- the session state machine and the submission -> run -> turn nesting;
+- a turn step by step, and the event bus;
+- the tool-call pipeline, from exposure through permission and elicitation to
+  settlement;
+- durability as seam substitution, with the journaled activity names;
+- the client/host boundary and the adapters over it;
+- the relay, cluster and Cloudflare placements;
+- portability and frozen identifiers.
+
+It was written from a read of `src/` at `add04a3`, not from the plans.
+
+An architecture document is exactly the kind of text that goes stale quietly,
+so it is the fourth file `verify:remaining-work` scans. It pins the mechanisms
+it names and the test case behind each invariant in its table. One pin was
+broken once to confirm the check fires on it.
+
+## 2026-09-26 - an architecture review
+
+`docs/plan-architecture-review.md` reviews the design that `architecture.md`
+describes. Items 125–132 in the live list track its proposals.
+
+The main finding: two mechanisms are rebuilt, whole or in part, wherever
+they are needed.
+- **The tool-call pipeline.** Code mode's `invoke` runs `decide` and the
+  handler, but not host scheduling. A tool the host serialises is therefore
+  not serialised when it is called through `execute` (item 125, open).
+- **The session's nondeterministic steps.** `/durable` swaps about eight of
+  them, and writes that assembly twice.
+
+In addition, 19 of the 24 inventoried erasing casts come from wrapping,
+merging or restating Effect AI's closed toolkit and model types.
+
+The proposals, and how each stands against the record:
+- **One internal tool path** (item 126) fits within `PLAN.md` §17.
+- **A public tool middleware chain** (item 127) contradicts §17 as written.
+- **A `Journal` seam** (item 129) turns on whether Cloudflare meets §30.1's
+  condition. Both of these conflicts are quoted, and both are left to the
+  owner.
+- **Explicit client capabilities** were declined on 2026-09-11 (item 86).
+  This review found no case that meets that item's reopen trigger, so the
+  proposal is recorded but not reopened.
+
+## 2026-09-26 - host scheduling holds the calls that do work
+
+Item 125, from the architecture review. Code mode's nested calls ran without
+the host's `ToolScheduling`, so a tool the host serialised could overlap
+itself when a program called it.
+
+The probe written for that fix found an older fault. Under
+`maxConcurrent(1)`, a `Subagent.tool` call held the only permit while its
+child's tool call waited for it, and the run hung for ever.
+
+`ToolScheduling.Container` fixes both, by marking a tool whose work is other
+tool calls:
+- the scheduling skips a container call;
+- it holds each nested call as it would a direct one;
+- `execute`, `Subagent.tool`, `toolScoped` and `Subagent.durable` are
+  containers.
+
+The design follows `effect-agent`'s broker, where programmatic calls pass the
+same preflight as direct ones. Two tests in `test/ToolScheduling.test.ts`
+failed before the fix, and each half of the fix was broken once to show they
+still catch it.
+
+## 2026-09-26 - what effect-agent adds
+
+`danieljvdm/effect-agent` was reviewed from its source at `343eba5`, and
+`plan-architecture-review.md` §7 records what bears on this repository.
+
+- **Item 129 (a `Journal` seam) gets evidence.** One journal seam at turn
+  granularity runs on SQLite, Postgres and Durable Object SQLite, without
+  Workflow. It also gets a warning: that hook grew into a coordinator
+  protocol.
+- **The broker shape was adopted as item 125** (above).
+- **Three proposals are new:**
+  - item 133: park an unknown tool outcome behind an operator resolution,
+    instead of a defect that ends the run;
+  - item 134: an exported failpoint sweep for store certification;
+  - item 135: recovery as one pure, explainable decision.
+- **Its subagent budget reservation is left to the owner.** Item 99 kept
+  "counted, not capped" because reserving needs `Budget` to carry ceilings.
+
+## 2026-09-26 - messaging between sessions
+
+The owner asked for `effect-agent`'s messaging, and for OTP-style supervision
+built on it. `docs/plan-supervision.md` maps the pieces:
+- a session is a process;
+- `SessionInbox` is the mailbox;
+- `Messaging` is send and reply;
+- a monitor turns a terminal outcome into a `down` item;
+- a supervisor is a value that a host runs.
+
+Its first slice is built: `/sessions`' `Messaging`.
+- **Messages.** Named routes, with a required `authorize`.
+- **Replies** go only to a recorded sender.
+- **Framing.** The recipient reads a harness-framed system message.
+- **Status** is recorded per message.
+- **Delivery** is the inbox's own.
+
+One decision changed while building it. The plan first said user-role text,
+so that peer text would not borrow the harness's voice. But
+`AgentSession.framework` asks for a system role, because a plain string
+reads as the person's input, and `reportToParent` already renders a child's
+output that way. So a message is a system message whose frame labels the
+quoted text as another agent's output, and `render` can replace the frame.
+
+Items 136 (monitors), 137 (an in-process supervisor) and 138 (a durable
+supervisor, gated on item 133) track the rest.
+
+## 2026-09-26 - monitors, and a session that outlived its handle
+
+`/sessions`' `Monitor` is plan-supervision §3. A target's failed or
+interrupted submission, or its close, becomes a `down` item in the watcher's
+inbox. The id comes from the event, and a completion is not a down.
+
+Building it found a core fault. `AgentClient.layer` captured its context
+while it was being built, including the layer's own `Scope`, and provided
+that over the caller's. As a result:
+- every in-process session lived until the whole client closed;
+- closing a handle's scope emitted no `SessionClosed`;
+- observers of that session hung;
+- `AgentSessionHost.closeSession` closed nothing.
+
+The caller's scope is now provided innermost (`b0a7c26`), and a test pins
+it.
+
+## 2026-09-26 - an in-process supervisor
+
+`/sessions`' `Supervisor` is plan-supervision §4 (item 137).
+- **OTP's policy.** Restart types, the three strategies and an intensity
+  window.
+- **What agents add:**
+  - a token ceiling on a budget the children share;
+  - a classifier that restarts only a retryable `AiError` by default;
+  - a rule no classifier overrides: an unknown tool outcome is never
+    restarted.
+- **Children are effects,** so a nested supervisor is a child, and its
+  escalation climbs the tree.
+
+Re-reading before the tests found one fault: `task` provided a fresh budget
+innermost, which would have hidden a task's spending from the supervisor's
+ceiling. It now uses the ambient budget, and the ceiling test fails without
+that.
+
+Item 139 holds `resubmit`, `rewind` and escalation into an agent's inbox.
+Item 138 holds the durable supervisor, gated on 133.
+
+## 2026-09-26 - a review of the session's changes
+
+A review of `add04a3..HEAD` found three faults in this session's own code.
+Each is fixed, with a test that failed first.
+
+- **A second watcher of one target was never told.** A down's id left out
+  the watcher, and the shared queue drops a repeated id. It is now
+  `down:<watcher>:<target>:...`.
+- **A subagent called from `/code` could still deadlock** under
+  `maxConcurrent(1)`. `CodeMode.invoke` held every nested call under the host
+  scheduling, containers included. It now skips a `ToolScheduling.Container`
+  there too.
+- **A capped supervisor hid the ambient spend from its children.** Its
+  budget wrapper answered `spent` with the supervisor's own count, so a
+  child's `Budget.within` could overrun a limit the application set. Children
+  now read the ambient totals, as a delegated child does, while `maxTokens`
+  counts only the children's own spend. That second half has its own test.
+
+## 2026-09-26 - an agent as supervisor
+
+Plan-supervision §4.1, slice 1 (item 139). Where a supervisor would give up,
+it can now consult an agent:
+- the agent acts through six tools bound to that one supervisor;
+- it ends with `resume` or `give_up`;
+- a timeout falls back to giving up, so a broken supervising agent cannot
+  stall the tree.
+
+Three limits survive the conversation: the budget, an unknown tool outcome,
+and the restart limit, which the agent can pass only through an explicit
+allowance.
+
+Tasks can be `resubmit` (one session per supervisor), and a fresh restart can
+start from the agent's note.
+
+Typing it found a real fault before any test ran. A restart the agent asks
+for is started from the agent's tool fibre, so the child would have run
+with the agent's context rather than the supervisor's. Every start now runs
+in the supervisor's captured context, replaced whole, and a test with a
+supervisor-only service pins it.
+
+## 2026-09-26 - an agent as supervisor, slice 2
+
+Item 140. A supervising agent can now:
+- steer a running task (`steer_child`), with a note framed as the
+  supervisor's, which the task reads at its next turn;
+- start children from templates declared on the spec (`start_child`). The
+  supervisor names them, a cap limits how many, and a spent budget refuses
+  a start;
+- be asked about any exit, through `"ask"` as a classifier answer.
+
+One part of the slice was decided against rather than built: charging the
+agent's own turns to `maxTokens`. The agent is a session made outside
+`run`, and an ambient `Budget` provided to both already caps them together.
+`rewind` became item 141, gated on a use.
+
+## 2026-09-26 - a review of the supervising agent
+
+A review of `ce79090..HEAD` found two faults. Both are fixed, test first.
+
+- **The allowance lifted the budget as well as the restart limit.**
+  `admitRestart` reports the restart limit before it reaches the budget, and
+  `restart_child` let `grant.restarts` override whatever it reported. So a
+  child could be restarted after `maxTokens` was spent. The budget is now
+  checked first and on its own; the allowance lifts only the limit.
+- **A second answer was reported as taken.** `decide` completed the
+  decision without checking whether it was already made. So a `give_up`
+  after a `resume` in the same batch was told "the supervisor gives up"
+  while the supervisor carried on. Now:
+  - one answer wins, and a later answer, or a change after it, is refused;
+  - on a timeout the supervisor claims the decision itself, under the lock
+    `decide` takes, so an answer arriving in that window is refused rather
+    than ignored.
+
+The timeout race itself cannot be driven deterministically. It rests on the
+same atomic claim the tested path uses.
+
+## 2026-09-26 - one internal path for every tool call
+
+Item 126. The stages that decide whether and when a tool call runs are now
+two internal functions, and every entry point passes through them:
+- `ToolExecution.authorize`: the decision, the floor, the question, and a
+  remembered grant;
+- `ToolExecution.scheduled`: the host's scheduling, skipping containers.
+
+Code mode's nested calls had their own copy of the permission handling, and
+it dropped "allow always". Now they share the direct path's copy.
+
+## 2026-09-26 - in-process sessions resume from a cursor
+
+Item 130. The in-process client keeps a bounded record of each session's
+recent envelopes, fed from the session's synchronous sink.
+- `events({ after })` resumes inside it with no gap and no repeat, where it
+  used to fail outright.
+- RPC and the relay resume too, through the host.
+- A cursor behind the record is refused.
+
+The host's own tail still serves `eventLog`. When the record was offered in
+its place, five host tests failed: it would have ignored the operator's
+`maxRetainedEvents` and the host's own `oldest` boundary.
+
+
+## 2026-09-26 - admission stated once
+
+Item 128. Whether a submission may take a session was written three times:
+in the local session, the memory store and the SQL store. It is now one pure
+`admit` in `internal/admission.ts`. Each store still runs it inside its own
+atomic section, and one table-driven suite holds all three to it.
+
+The item's second half, one reducer for the dispatch outbox, was dropped.
+The cluster's row and Cloudflare's intent have different lifecycles, so
+there is no shared rule for a reducer to state.
+
+## 2026-09-26 - certifying a store of your own
+
+Item 134. `DurableEquivalence` takes your own stores (`stores`). Its new
+`sweep` crashes a run at every in-turn boundary and compares each recovery
+with the run that never crashed. With the conformance suites, that is two
+tiers of certification, both from `/testing`. A delivery log that forgets
+its keys is caught at `after-commit`.
+
+## 2026-09-26 - an unknown tool outcome can be asked about
+
+Item 133. A durable tool marked `DurableToolkit.askWhenUnknown` no longer ends
+the run when its outcome is unknown. The run asks an operator through the
+session's ordinary elicitation (`"tool-outcome"`). Answering with the result,
+or with a failure, is what the model sees. The handler still runs once. The
+default is unchanged.
+
+## 2026-09-26 - recovery, explained
+
+Item 135. What a durable session's reconciliation owes is now one pure
+decision, `Recovery.classify`, which `DurableAgentClient` switches on. An
+operator can run the same decision with `Recovery.inspect`, which reads only.
+It returns the decision in a sentence, any tool outcomes parked for an
+answer, and any place where the stores disagree with themselves.
+
+## 2026-09-26 - the Journal seam, slice 1
+
+Item 129, which the owner approved. `PLAN.md` §30.1 is amended to record the
+decision and its constraint: the seam stays at `step` and a few commit
+points. The new `Journal.step(name, schema, effect)` is the identity
+locally. Under `/durable` it is an activity (`DurableJournal`), provided in
+both workflow bodies, so a transform or hook can journal what it must not
+repeat. A crash test shows that a replayed turn reads the recorded value.
+The model call, tools, a shared body assembly and a Cloudflare journal are
+the next slices.
+
+## 2026-09-26 - one durable body assembly, and a refusal that was missing
+
+Item 129, slice 3. Both durable workflow bodies used to build their
+substitutions by hand. They now share `DurableAgent.assemble`, which covers
+the toolkit, the model, the journal, permission, strategy, input and host
+scheduling, along with the admission checks. The copies had drifted: only
+`DurableAgent` refused an `ExecutionPlan`. Under `DurableAgentClient`, an
+agent with a plan made its provider calls outside the journal, so a replay
+repeated them. The refusal is now in the shared admission, inside the
+body's scope, so the client frees the session afterwards.
+
+## 2026-09-27 - a durable agent carries an ExecutionPlan on batch submissions
+
+Item 129, slice 2, the batch half, done batch-first as recommended.
+`Journal` gains one commit point, `modelCall`. The kernel uses it only for a
+batch model call under an `ExecutionPlan`: the plan's steps provide their
+own model, which shadows `DurableModel`. `/durable` backs the commit point
+with `DurableModel`'s codec, so the whole ladder is one journalled activity.
+In a crash test, the plan's provider was asked twice, where it was asked
+three times without the commit. A streamed submission under a plan is still
+refused, pending the owner's choice of a streaming commit point. The commit
+adds one inventoried erasing cast in `DurableModel`, for 25 in total.
+
+## 2026-09-27 - a durable agent streams under an ExecutionPlan too
+
+Item 129, slice 2, done. `Journal` gains a second commit point,
+`modelStream`. A streamed call under a plan hands its ladder to it, and
+`/durable` records the completed response as one activity, while the parts
+still reach the session live, by the fold `DurableModel.streamText` already
+used. No plan is refused any more. A streamed crash test asks the plan's
+provider twice, and three times without the commit. Both commit points share
+the one inventoried cast, so the count stays at 25.
+
+## 2026-09-27 - a supervisor that survives its own death; the Journal seam closed
+
+Item 138. `Supervisor.run` takes a `SupervisorLedger`, in memory or over any
+`KeyValueStore`. `Supervisor.remoteTask` asks a session through an
+`AgentClient`. A supervisor started again over the ledger:
+- waits on its predecessor's run instead of starting another;
+- skips children that finished;
+- counts the restarts already made.
+
+A test against `DurableAgentClient` found that a death between submitting
+and recording made the next life submit under a new key, which was refused
+as busy. Attempts are now opened before anything is submitted.
+
+Item 129 is closed on three slices. The tool slice and the Cloudflare
+journal were decided against, and the ledger gives the reasons: they would
+rename journalled activities and drop durability for the kernel's other
+model callers, for one turn in flight on Cloudflare.
+
+## 2026-09-27 - review of the durable supervisor
+
+The review found two gaps in item 138's ledger, and both are fixed. First,
+a ledger was never cleared, so a later run under the same name skipped every
+child the last one finished. A life that ends, by finishing or escalating,
+now clears it. Second, interrupting the supervisor stopped its remote runs
+but left them recorded, so the next life waited on a stopped run. The
+attempt is now abandoned. The ledger's docs also state that one live
+supervisor per name may use it.

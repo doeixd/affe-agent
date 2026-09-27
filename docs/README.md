@@ -21,6 +21,7 @@ and work awaiting a caller or external evidence.
 
 | document | what it is |
 | --- | --- |
+| [architecture.md](./architecture.md) | How the parts fit: the layers, one turn end to end, events, the tool pipeline, durability as seam substitution, the client/host boundary, portability, and the invariants with the test that holds each. Read before the guides. |
 | [guide-sessions.md](./guide-sessions.md) | What a local session does: steering, follow-ups, interruption, streaming, elicitation, events, errors, authoring, snapshots, testing. |
 | [guide-permissions.md](./guide-permissions.md) | The `Permission` seam: allow / ask / deny, rules, exceptions, remembered grants. |
 | [guide-sandbox.md](./guide-sandbox.md) | `/sandbox`, the coding toolkits, the `shell` dialect, and the Claude Code / OpenCode bridges. |
@@ -74,6 +75,8 @@ workerd through miniflare). Each file carries its own status line, and
 
 | document | what it is |
 | --- | --- |
+| [plan-architecture-review.md](./plan-architecture-review.md) | A review of the whole architecture (2026-09-26). The tool-call pipeline and the session's nondeterministic steps are rebuilt wherever they are needed. Code mode bypasses host scheduling. One internal tool path, a pure session reducer, a `Journal` seam and one event-retention seam are proposed; two of them conflict with `PLAN.md` §17 and §30.1, and those conflicts are quoted. §7 weighs `danieljvdm/effect-agent`'s source against it. Items 125–135 (125 done). |
+| [plan-supervision.md](./plan-supervision.md) | OTP-style supervision over sessions, after `effect-agent`'s messaging. Sessions are processes, `SessionInbox` is the mailbox, `Messaging` (§2, **built**) is send and reply, `Monitor` (§3) turns a terminal outcome into a `down` item, and §4 specifies a supervisor whose failure classification never auto-restarts an unknown tool outcome and can escalate to an agent. `Monitor` (§3), the in-process `Supervisor` (§4), an agent as supervisor (§4.1: consultation, steering, templates, `"ask"`) and the durable supervisor's ledger and `remoteTask` (§5, item 138) are **built**. Item 141 is open. |
 | [plan-agent-product-control-plane.md](./plan-agent-product-control-plane.md) | Persistent named-agent product/control-plane architecture: `AgentSpec -> AgentDefinition`, organizations, projects/tasks, SessionDirectory + Needs You, browser/computer, connections/OAuth, automations, artifacts, knowledge, frontend, and an ordered build sequence over the existing kernel. |
 | [plan-workbench.md](./plan-workbench.md) | A fully open-source Open WebUI/bb-class workbench with Effect-native product/runtime/UI seams: `AgentClient` stays the execution contract, `AgentEvent` drives a UI-neutral projection, and React/assistant-ui/AG-UI are replaceable edge adapters. |
 | [plan-filetypes.txt](./plan-filetypes.txt) | End-to-end multimodality. **Phases 1–5 landed** (the `PromptWire` codec, `content` on results and events, media through A2A/OpenAI/AG-UI, and `/blob`); steps 6 (adapters externalizing automatically) and 7 (relay) remain. |

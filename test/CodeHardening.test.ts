@@ -3,6 +3,7 @@ import { Deferred, Duration, Effect, Fiber, Ref, Schema } from "effect"
 import { Tool } from "effect/unstable/ai"
 import * as Agent from "../src/Agent.js"
 import { CodeMode } from "../src/code/index.js"
+import * as ToolScheduling from "../src/ToolScheduling.js"
 
 /**
  * Hardening pins: a model-written program is untrusted input, so no
@@ -202,5 +203,27 @@ describe("interrupted programs report every issued call (item 98)", () => {
         calls.map((call) => [call.path.join("."), call.outcome]).sort(),
         [["data.echo", "not-started"], ["data.echo", "succeeded"], ["data.hang", "uncertain"]]
       )
+    }))
+
+  it.live("a call still queued in the host's scheduling is not-started, not uncertain", () =>
+    Effect.gen(function*() {
+      const queued = yield* Deferred.make<void>()
+      const data = yield* Agent.toolkit([Echo], { echo: ({ text }) => Effect.succeed(text) })
+      // A host that never lets `echo` through: the call is queued, and its
+      // handler never begins.
+      const closed: ToolScheduling.ToolScheduling = {
+        around: () => () => Deferred.succeed(queued, void 0).pipe(Effect.andThen(Effect.never)),
+        description: { _tag: "Unconstrained" }
+      }
+      const calls: Array<CodeMode.ObservedCall> = []
+      const runtime = CodeMode.make({ tools: { data } })
+      const fiber = yield* Effect.forkChild(
+        runtime.execute("return await tools.data.echo({ text: \"a\" })", {
+          onCall: (call) => Effect.sync(() => void calls.push(call))
+        }).pipe(Effect.provide(ToolScheduling.layer(closed)))
+      )
+      yield* Deferred.await(queued)
+      yield* Fiber.interrupt(fiber)
+      assert.deepStrictEqual(calls.map((call) => [call.path.join("."), call.outcome]), [["data.echo", "not-started"]])
     }))
 })

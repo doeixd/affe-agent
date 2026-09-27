@@ -330,8 +330,11 @@ tools stay inside the harness. A failed run is a `{"error": ...}` frame then
 joins or replays work (and in strict mode names the session, so a durable
 backend refuses a concurrent retry from another process).
 
-**MCP** (`/mcp`). An agent exposed as an MCP server's `ask_agent` tool, and
-MCP servers bound as toolkits. stdio transports are loaded lazily so the
+**MCP** (`/mcp`). An agent exposed as an MCP server's tools, and MCP
+servers bound as toolkits. `ask_agent` asks and waits. The `agent_*` tools
+(`agent_start`, `agent_await`, `agent_close`, `agent_steer`,
+`agent_follow_up`, `agent_interrupt`, `agent_status` and `agent_respond`)
+drive a session step by step. stdio transports are loaded lazily so the
 portable entry never imports Node.
 
 What they share: *none of them own persistence*, and none of them carry the

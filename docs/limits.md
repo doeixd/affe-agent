@@ -8,6 +8,7 @@ constant it names.
 |------|-------|---------|-------|--------------|
 | Host | `maxSessions` | required | `AgentSessionHost.Options` | `AgentCapacityExceededError` (429 on HTTP) — host never evicts live work |
 | Host | `maxRequestsPerSession` | required | `AgentSessionHost.Options` | `AgentRequestCapacityExceededError` — oldest *completed* request record evicted FIFO |
+| Client | `retainedEvents` | `256` | `AgentClient.layer` options | the in-process record `events({ after })` resumes from; a cursor behind it is refused with `AgentInvalidRequestError`, never served with a gap. `0` keeps none |
 | Sandbox | `ExecOptions.timeout` | `10 seconds` | `Sandbox.timeoutMillis` / `Sandbox.ExecOptions` | `TimeoutError` after `SIGTERM` + 1 s `SIGKILL` grace, awaited on `close` |
 | Sandbox | `ExecOptions.maxOutputBytes` | `1 MiB` | `Sandbox.ExecOptions` | `OutputLimitError` |
 | Compaction | `maxSessions` | `1024` | `Compaction.make({ maxSessions })` | oldest checkpoint evicted; session re-summarises next turn |

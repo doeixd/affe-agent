@@ -8,6 +8,7 @@ import * as PromptWire from "../PromptWire.js"
 import { isStorageError, StorageError } from "../Errors.js"
 import { detailOf } from "../internal/detail.js"
 import { escapeIdentifier } from "../internal/sqlIdentifier.js"
+import * as Admission from "../internal/admission.js"
 import * as Namespace from "../internal/namespace.js"
 
 /**
@@ -126,6 +127,34 @@ export type ClaimOutcome =
     }
   | { readonly _tag: "Busy"; readonly claim: Claim }
   | { readonly _tag: "Missing" }
+
+/** A record as admission sees it; see `internal/admission.ts`. */
+const slotOf = (record: SessionRecord | undefined): Admission.Slot<Claim> =>
+  record === undefined
+    ? { _tag: "Missing" }
+    : Option.isSome(record.claim)
+    ? { _tag: "Held", holder: record.claim.value, key: Option.fromUndefinedOr(record.claim.value.key) }
+    : { _tag: "Idle", submissionCount: record.submissionCount }
+
+/**
+ * The claim an `Open` decision allocates. The id derives from the
+ * session-local ordinal, which makes it stable across processes — a later
+ * reconciliation pass names the same submission without having observed the
+ * original claim.
+ */
+const openClaim = (
+  sessionId: string,
+  ordinal: number,
+  prompt: string,
+  submission: Parameters<DurableSessionStore["claim"]>[1]
+): Claim => ({
+  submissionId: `${sessionId}:submission-${ordinal}`,
+  prompt,
+  ...(submission.input === undefined ? {} : { input: submission.input }),
+  stream: submission.stream,
+  ...(submission.key === undefined ? {} : { key: submission.key }),
+  ...(submission.principal === undefined ? {} : { principal: submission.principal })
+})
 
 /**
  * The durable session registry.
@@ -493,34 +522,23 @@ export const memoryStoreWith = (options?: {
         Effect.flatMap(encodeHistory(submission.prompt), (encoded) =>
           Ref.modify(state, (all): [ClaimOutcome, MemoryState] => {
             const found = all.sessions.get(sessionId)
-            if (found === undefined) return [{ _tag: "Missing" }, all]
-            if (Option.isSome(found.claim)) {
-              // The same request again, not a second one: a caller whose
-              // acknowledgement was lost is told what it would have been told
-              // the first time. See `claim`'s contract.
-              return submission.key !== undefined &&
-                  found.claim.value.key === submission.key
-                ? [
-                  { _tag: "Claimed", claim: found.claim.value, history: found.history },
-                  all
-                ]
-                : [{ _tag: "Busy", claim: found.claim.value }, all]
+            const decision = Admission.admit(slotOf(found), Option.fromUndefinedOr(submission.key))
+            // Closed is not a durable state; `slotOf` never produces it.
+            if (found === undefined || decision._tag === "Missing" || decision._tag === "Closed") {
+              return [{ _tag: "Missing" }, all]
             }
-            // The id derives from the session-local ordinal, which makes it
-            // stable across processes — a later reconciliation pass names the
-            // same submission without having observed the original claim.
-            const claim: Claim = {
-              submissionId: `${sessionId}:submission-${found.submissionCount + 1}`,
-              prompt: encoded,
-              ...(submission.input === undefined ? {} : { input: submission.input }),
-              stream: submission.stream,
-              ...(submission.key === undefined ? {} : { key: submission.key }),
-              ...(submission.principal === undefined ? {} : { principal: submission.principal })
+            // The same request again, not a second one: a caller whose
+            // acknowledgement was lost is told what it would have been told
+            // the first time. See `claim`'s contract.
+            if (decision._tag === "Rejoin") {
+              return [{ _tag: "Claimed", claim: decision.holder, history: found.history }, all]
             }
+            if (decision._tag === "Busy") return [{ _tag: "Busy", claim: decision.holder }, all]
+            const claim = openClaim(sessionId, decision.ordinal, encoded, submission)
             const updated: SessionRecord = {
               ...found,
               status: "running",
-              submissionCount: found.submissionCount + 1,
+              submissionCount: decision.ordinal,
               claim: Option.some(claim)
             }
             // An idle session has nothing outstanding; whatever the
@@ -881,31 +899,22 @@ export const sqlStore = (
             .withTransaction(
               Effect.gen(function* () {
                 const found = yield* readRecord(sessionId)
-                if (Option.isNone(found)) {
+                const decision = Admission.admit(
+                  slotOf(Option.getOrUndefined(found)),
+                  Option.fromUndefinedOr(submission.key)
+                )
+                if (Option.isNone(found) || decision._tag === "Missing" || decision._tag === "Closed") {
                   return { _tag: "Missing" } as const
                 }
                 const record = found.value
-                if (Option.isSome(record.claim)) {
-                  // The same request again, not a second one. See `claim`'s
-                  // contract: a lost acknowledgement is indistinguishable from
-                  // a lost write, and the key is what tells them apart.
-                  return submission.key !== undefined &&
-                      record.claim.value.key === submission.key
-                    ? ({
-                      _tag: "Claimed",
-                      claim: record.claim.value,
-                      history: record.history
-                    } as const)
-                    : ({ _tag: "Busy", claim: record.claim.value } as const)
+                // The same request again, not a second one. See `claim`'s
+                // contract: a lost acknowledgement is indistinguishable from
+                // a lost write, and the key is what tells them apart.
+                if (decision._tag === "Rejoin") {
+                  return { _tag: "Claimed", claim: decision.holder, history: record.history } as const
                 }
-                const claim: Claim = {
-                  submissionId: `${sessionId}:submission-${record.submissionCount + 1}`,
-                  prompt: encoded,
-                  ...(submission.input === undefined ? {} : { input: submission.input }),
-                  stream: submission.stream,
-                  ...(submission.key === undefined ? {} : { key: submission.key }),
-                  ...(submission.principal === undefined ? {} : { principal: submission.principal })
-                }
+                if (decision._tag === "Busy") return { _tag: "Busy", claim: decision.holder } as const
+                const claim = openClaim(sessionId, decision.ordinal, encoded, submission)
                 const claimJson = yield* encodeClaim(claim)
                 // The predicate restates the invariant in the statement, and
                 // the row is read back to learn whether *this* claim landed.
@@ -914,7 +923,7 @@ export const sqlStore = (
                 // claimers read `claim IS NULL`, blocks the second on the
                 // first's lock, and then matches zero rows for it. Returning
                 // `Claimed` regardless would hand both the same submission.
-                yield* sql`UPDATE ${sessions} SET status = 'running', submission_count = ${record.submissionCount + 1}, claim = ${claimJson} WHERE session_id = ${sessionId} AND claim IS NULL`
+                yield* sql`UPDATE ${sessions} SET status = 'running', submission_count = ${decision.ordinal}, claim = ${claimJson} WHERE session_id = ${sessionId} AND claim IS NULL`
                 const after = yield* readRecord(sessionId)
                 const landed = Option.isSome(after) &&
                   Option.isSome(after.value.claim) &&

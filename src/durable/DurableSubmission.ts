@@ -15,8 +15,6 @@ import type { AgentDefinition } from "../Agent.js"
 import type { AgentEventEnvelope } from "../AgentEvent.js"
 import * as AgentEvent from "../AgentEvent.js"
 import * as AgentSession from "../AgentSession.js"
-import * as Permission from "../Permission.js"
-import * as ToolScheduling from "../ToolScheduling.js"
 import * as Ids from "../internal/ids.js"
 import * as Telemetry from "../internal/telemetry.js"
 import { AgentClosedError, AgentIdleError } from "../Errors.js"
@@ -25,13 +23,8 @@ import * as DurableAgent from "./DurableAgent.js"
 import * as DeliveryLog from "./DeliveryLog.js"
 import * as DurableChannels from "./DurableChannels.js"
 import * as DurableElicitation from "./DurableElicitation.js"
-import * as DurableModel from "./DurableModel.js"
-import * as DurablePermission from "./DurablePermission.js"
 import * as DurablePolling from "./DurablePolling.js"
-import * as DurableToolkit from "./DurableToolkit.js"
-import * as ToolContracts from "./ToolContracts.js"
 import { InsideToolActivity } from "../internal/insideToolActivity.js"
-import { describedTools } from "../internal/describedTools.js"
 import type * as DurableSessionStore from "./DurableSessionStore.js"
 import { isStorageError, StorageError } from "../Errors.js"
 import * as AgentOutput from "../AgentOutput.js"
@@ -637,17 +630,11 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
       // Built inside the workflow body: activities need the workflow context,
       // and `LanguageModel.make` pins its provider's requirements, so the
       // context cannot be threaded in from outside.
-      const toolkit = yield* DurableAgent.resolveToolkit(agent.toolkit)
-      const durableTools = yield* DurableToolkit.wrap(toolkit)
       // Submission-scoped activity names: several executions of this
       // definition run against the same engine, and their journals must not
       // share an activity namespace.
       const scopePrefix = `${payload.submissionId}:`
-      const modelLayer = yield* DurableModel.wrap(durableTools, {
-        prefix: scopePrefix,
-        output: agent.output,
-        toolExposure: agent.toolExposure
-      })
+      const assembled = yield* DurableAgent.assemble(agent, { prefix: scopePrefix })
       const channels = yield* DurableChannels.factory(options.store, {
         prefix: scopePrefix
       })
@@ -697,27 +684,6 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
         )
       )
 
-      // Decisions are journalled like tool calls: see `DurablePermission`.
-      // Through a ref, set to the policy this attempt may use once
-      // `DurablePermission.effective` has decided it, below.
-      const admittedPolicy = yield* Ref.make(agent.permission)
-      // The host's tool scheduling, likewise: the body runs under a delegate
-      // set once `capturedScheduling` has decided it (item 105).
-      const hostScheduling = yield* ToolScheduling.Current
-      const admittedScheduling = yield* Ref.make(hostScheduling)
-      const durablePermission = yield* DurablePermission.wrap(
-        DurablePermission.delegating(admittedPolicy, Permission.describe(agent.permission)),
-        { prefix: scopePrefix }
-      )
-      // As first run, not as this process is configured: see `capturedStrategy`.
-      const toolExecution = yield* DurableAgent.capturedStrategy(agent.toolExecution, scopePrefix)
-      const durableAgent = {
-        ...agent,
-        toolkit: durableTools,
-        permission: durablePermission,
-        toolExecution,
-        input: DurableAgent.durableInput(agent.input, scopePrefix)
-      } as AgentDefinition<Tools, any, any, any, any, any>
 
       // The value the client validated at admission, decoded again here
       // with the agent's own schema; see `InputBoundary.askedOf`.
@@ -752,11 +718,8 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
           // Inside this block, so the refusal is an agent failure like any
           // other -- its projection commits and the session is freed rather
           // than left claimed behind a body that failed before it began.
-          yield* ToolContracts.check(describedTools(toolkit.tools, agent), scopePrefix)
-          // And the permission policy it was admitted under (item 105, Q6).
-          yield* Ref.set(admittedPolicy, yield* DurablePermission.effective(agent.permission, scopePrefix))
-          yield* Ref.set(admittedScheduling, yield* DurableAgent.capturedScheduling(hostScheduling, scopePrefix))
-          const session = yield* AgentSession.makeEngine(durableAgent, {
+          yield* assembled.admit
+          const session = yield* AgentSession.makeEngine(assembled.agent, {
             channels,
             elicitation,
             sessionId: payload.sessionId,
@@ -852,11 +815,7 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
           return yield* Effect.failCause(exit.cause)
         })
       ).pipe(
-        Effect.provide(modelLayer),
-        Effect.provideService(
-          ToolScheduling.Current,
-          ToolScheduling.delegating(admittedScheduling, hostScheduling.description)
-        ),
+        assembled.provide,
         // Success commits its projection and crosses as data — unless the
         // "success" is a suspension. A session absorbs interruption by
         // design, so a parked workflow's prompt returns normally, as an

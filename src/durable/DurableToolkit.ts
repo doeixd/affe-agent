@@ -1,5 +1,6 @@
 import { Cause, Context, Effect, Option, Ref, Schema, Stream } from "effect"
 import * as AgentEvent from "../AgentEvent.js"
+import * as Elicitation from "../Elicitation.js"
 import { Tool, Toolkit } from "effect/unstable/ai"
 import { Activity, WorkflowEngine } from "effect/unstable/workflow"
 import { activityName, nextOccurrence, startMarkerName } from "../internal/toolActivity.js"
@@ -222,6 +223,101 @@ export const delegate = <T extends Tool.Any>(tool: T, run: Delegation["run"]): T
   // `annotate` widens to the structural `Tool<Name, Config, R>`, which is `T`.
   tool.annotate(DurableDelegation, Option.some({ run })) as T
 
+/**
+ * What a call whose outcome is unknown does (item 133).
+ *
+ * - `"end-run"`, the default: the run ends with `DurableToolUnresolvedError`
+ *   as a defect, and the submission settles `Failed`. See `reraise`.
+ * - `"ask"`: the run asks through the session's elicitor, as an approval
+ *   does, and waits for an operator to say what happened. The request's
+ *   `kind` is `"tool-outcome"`, and its `detail` is an `UnknownOutcome`.
+ *   Under `/durable` the wait suspends the workflow, and the question shows in
+ *   the session's pending requests on every transport. `respond` answers it:
+ *   - `granted: true` with `value` set to the tool's result, encoded as its
+ *     success schema encodes it: the call succeeded, and the model sees
+ *     that result;
+ *   - `granted: false`, with an optional `value` string saying why: the call
+ *     failed, and the model sees that failure.
+ *
+ * Either way the operator's answer is what the model sees. The model is never
+ * shown "unknown" dressed up as a failure it might retry. It sees only an
+ * outcome someone who could check has stated. With no elicitor to ask, the
+ * run ends as `"end-run"` does. An answer whose value does not decode as the
+ * tool's result also ends the run, since there is no result to commit.
+ *
+ * Per tool, because whether anyone can find out what happened is the tool's
+ * nature: a payment can be looked up in the provider's dashboard, and a
+ * message sent to a fire-and-forget queue cannot.
+ */
+export const OnUnknownOutcome = Context.Reference<"end-run" | "ask">(
+  Namespace.tag("durable/OnUnknownOutcome"),
+  { defaultValue: () => "end-run" }
+)
+
+/**
+ * Mark a tool so that an unknown outcome is asked about, not fatal. See
+ * `OnUnknownOutcome`.
+ *
+ * ```ts
+ * const Charge = DurableToolkit.askWhenUnknown(Tool.make("charge", { parameters, success: Receipt }))
+ * ```
+ */
+export const askWhenUnknown = <T extends Tool.Any>(tool: T): T =>
+  // The same tool type back, as `delegate` does.
+  tool.annotate(OnUnknownOutcome, "ask") as T
+
+/** What a `"tool-outcome"` request carries as its `detail`. */
+export const UnknownOutcome = Schema.Struct({
+  toolName: Schema.String,
+  toolCallId: Schema.String,
+  /** The call's parameters, as the model sent them. */
+  params: Schema.Unknown
+})
+export type UnknownOutcome = typeof UnknownOutcome.Type
+
+/** The request `kind` an unknown outcome is asked under. */
+export const unknownOutcomeKind = "tool-outcome"
+
+/**
+ * Ask what happened to a call, and journal the answer as its outcome.
+ *
+ * The request id derives from the call's activity name, so a replay asks the
+ * same question and reads the answer the first attempt was given. It is not
+ * `${submissionId}:elicit-N`: that counter belongs to the session, and a
+ * handler cannot reach it.
+ */
+const askOutcome = (
+  tool: Tool.Any,
+  toolName: string,
+  toolCallId: string,
+  activity: string,
+  params: unknown
+): Effect.Effect<Outcome, never, unknown> =>
+  // `unknown` requirements: a `Tool.Any`'s schema names none it can promise,
+  // and the handle this runs in is typed once, at its end.
+  Effect.gen(function* () {
+    const elicitor = yield* Elicitation.Current
+    if (Option.isNone(elicitor)) return { _tag: "Unresolved" } as const
+    const detail: UnknownOutcome = { toolName, toolCallId, params }
+    const answer = yield* elicitor.value.elicit(
+      { id: `${activity}:outcome`, kind: unknownOutcomeKind, detail },
+      Effect.void
+    )
+    if (!answer.granted) {
+      const reason = typeof answer.value === "string" && answer.value.length > 0
+        ? answer.value
+        : "an operator reported that the call failed"
+      return { _tag: "Failed", failure: { tag: "OperatorReportedFailure", message: reason, isDefect: false } } as const
+    }
+    const decoded = yield* Schema.decodeUnknownEffect(tool.successSchema)(answer.value).pipe(Effect.option)
+    if (Option.isNone(decoded)) return { _tag: "Unresolved" } as const
+    const encoded = yield* Schema.encodeUnknownEffect(tool.successSchema)(decoded.value).pipe(Effect.orDie)
+    return {
+      _tag: "Succeeded",
+      results: [{ _tag: "Ok", result: decoded.value, encodedResult: encoded, preliminary: false }]
+    } as const
+  })
+
 export const wrap = <Tools extends Record<string, Tool.Any>>(
   toolkit: Toolkit.WithHandler<Tools>
 ): Effect.Effect<Toolkit.WithHandler<Tools>, never, WorkflowContext> =>
@@ -403,7 +499,13 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
           )
         }).pipe(Effect.provide(workflowContext))) as Outcome
 
-        return Stream.fromIterable(yield* reraise(outcome, String(name), id))
+        // Asked in the workflow body, outside the activity, where waiting
+        // suspends the workflow rather than a call in flight.
+        const settled = outcome._tag === "Unresolved" && Context.get(tool.annotations, OnUnknownOutcome) === "ask"
+          ? yield* askOutcome(tool, String(name), id, activityName(index, String(name), id), params)
+          : outcome
+
+        return Stream.fromIterable(yield* reraise(settled, String(name), id))
       })) as unknown as Toolkit.WithHandler<Tools>["handle"]
 
     return { tools: toolkit.tools, handle }

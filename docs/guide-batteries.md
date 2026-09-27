@@ -81,6 +81,251 @@ batch still completes. Both are decided when the delegation is admitted:
 lowering a limit (on a new tool value) blocks new delegations and never
 cuts short a child already running.
 
+## Messaging between sessions
+
+`/sessions`' `Messaging` lets one session send another a message through a
+route named at construction. Replies go back to the recorded sender.
+
+```ts
+const advisor = Messaging.route("advisor", "advisor-session")
+const Asker = Agent.make({ tools: [Messaging.sendTool(advisor), Messaging.replyTool()] })
+// at the edge: Messaging.layer({ authorize }) beside the client, and a loop over
+// (yield* Messaging.deliverer()).deliver, retrying SessionBusyError
+```
+
+**Delivery.** A message is a `SessionInbox` item of kind `"framework"`, so
+its delivery is the inbox's: durable, deduplicated by id, into an idle
+session only, and never into a submission in flight. The recipient's model
+reads a system message the harness writes. It names the sender, the route and
+the message id, and says that the quoted text is another agent's output, not
+an instruction. `render` replaces that frame.
+
+**Routes.**
+- A route's target is a session id, or a function of the sender's id.
+- A model names a route, never a session, and a tool is built per route.
+- `authorize({ operation, route, sender, target, principal })` decides every
+  send and reply, and has no default. `Messaging.allowAll` is the explicit
+  opt-out.
+
+**Replies.**
+- A reply names a message id. It is refused with `UnknownMessageError`
+  unless the replying session received that message.
+- The reply goes back to that message's sender, and is authorized as a
+  `"reply"`.
+- A message received before a restart cannot be replied to: the ledger that
+  records senders lives in memory, while the queue is durable. The ledger
+  keeps the newest `maxRetained` messages (default 1024), and a reply to an
+  older one is refused the same way.
+
+**Status and ids.**
+- `inspect(id)` answers `Pending`, `Delivered` (a submission was admitted, not
+  settled) or `Undeliverable` with a reason.
+- A tool send gets a fresh id.
+- A programmatic `send` with a `key` is idempotent: the same key is the same
+  message.
+
+**Structure.** The tools read the `Messaging` service from context, which needs
+only a `PersistedQueue` store. `deliverer` is built where the `AgentClient`
+exists, as `Subagent.background`'s reports are, because the client serves the
+agent whose tools these are.
+
+### Monitors
+
+`Monitor.watch({ watcher, target })` tells one session when another goes
+down, as a framework item in the watcher's inbox.
+
+**What counts as down:**
+- `SubmissionFailed`, rendered with the failure's tag and message;
+- `SubmissionInterrupted`;
+- `SessionClosed`.
+
+A completed submission is not a down.
+
+**Ids and delivery.**
+- The item id comes from the event and the watcher
+  (`down:<watcher>:<target>:<submission>`, or
+  `down:<watcher>:<target>:closed`).
+- Two monitors, or a watch resumed over a cursor, enqueue each down once per
+  watcher, and two watchers of one target are each told.
+- By default the item goes onto `Messaging`'s queue, so one delivery loop
+  carries messages and downs.
+
+**Lifetime.**
+- The watch ends when the target closes.
+- Fork it into a scope that outlives the target: a watch in the target's own
+  scope is ended by the close it would report.
+- It is live. `after` resumes over a client that can, which is the durable
+  client.
+
+### Supervisors
+
+`Supervisor.run(spec)` runs a list of children and restarts them by a policy
+taken from OTP. It ends when no child is left running.
+
+```ts
+yield* Supervisor.run({
+  name: "research",
+  strategy: "one_for_one",
+  intensity: { maxRestarts: 3, within: "1 minute" },
+  maxTokens: 200_000,
+  children: [
+    Supervisor.task("search", Searcher, { prompt: "find sources", provide: model }),
+    Supervisor.task("summarise", Writer, { prompt: "write it up", provide: model, restart: "permanent" })
+  ]
+})
+```
+
+**Children.**
+- A child is any effect, with an id and a restart type:
+  - `permanent`: restarted after any exit;
+  - `transient` (the default): restarted after an abnormal exit only;
+  - `temporary`: never restarted.
+- `Supervisor.task` runs an agent on a prompt in a fresh session each time it
+  starts. A completed submission is a normal exit.
+- A nested supervisor is `Supervisor.child(id, Supervisor.run(spec))`.
+
+**Strategies.**
+- `one_for_one` restarts the child that exited.
+- `one_for_all` stops and restarts every running sibling with it.
+- `rest_for_one` does that for the siblings after it.
+- A temporary sibling is stopped but not restarted.
+
+**When a restart is refused.** Before restarting an abnormal exit, the
+supervisor checks, in order:
+1. **An unknown tool outcome.** A failure carrying
+   `DurableToolUnresolvedError` always escalates, whatever `classify` says,
+   because a restart would repeat a side effect that may already have
+   happened.
+2. **`classify`.** The default restarts only an `AiError` that its provider
+   marks `isRetryable`, and escalates everything else.
+3. **Intensity.** More than `maxRestarts` restarts within `within` escalates.
+4. **The budget.** With `maxTokens`, the children's turns are charged to a
+   budget of the supervisor's, and to the ambient one too. A restart once
+   they have spent it escalates.
+
+**Escalation.**
+- It stops every running child, last started first.
+- `run` then fails with `SupervisorEscalatedError`, naming the child and the
+  reason (`failure`, `unresolved`, `intensity` or `budget`).
+- A parent supervisor classifies that like any other failure, and escalates
+  it by default.
+
+**Task modes.**
+- A task is `fresh` by default: a new session each start.
+- `mode: "resubmit"` keeps one session for the supervisor's life and asks it
+  again, so a retry sees the failed attempt in its history.
+
+**Surviving the supervisor's own death.** Give the spec a `ledger` and use
+`remoteTask` for children whose work outlives the process: a durable session,
+or one reached over RPC or HTTP.
+
+```ts
+const ledger = SupervisorLedger.keyValue(kv) // any KeyValueStore: file, SQL, web storage
+
+yield* Supervisor.run({
+  name: "nightly",
+  ledger,
+  children: [Supervisor.remoteTask("report", { session: client.session(reportSessionId), prompt: "Write tonight's report." })]
+})
+```
+
+A supervisor started again over the same ledger, under the same name:
+- waits on the submission its predecessor was waiting on, instead of asking
+  again;
+- does not rerun a child that finished normally, unless it is `permanent`;
+- counts its predecessor's restarts against its intensity limit.
+
+Each attempt is opened in the ledger before it submits, under the key
+`name:child:n`. A supervisor that died between submitting and recording
+the submission is followed by one that submits under the same key, and a
+durable client still holding that claim rejoins it.
+
+The ledger is for a supervisor that *died*. A life that ends, by finishing or
+escalating, clears it, so tomorrow's run under the same name starts every
+child afresh. Interrupting a supervisor stops its remote children's runs and
+abandons those attempts, so they are not waited on again.
+
+**Limits.** Something must start the supervisor again: the ledger remembers,
+it does not restart. One supervisor per name may use a ledger at a time.
+Children started from templates are not recorded.
+`rewind` is specified in `plan-supervision.md` §4, not built.
+
+### An agent as supervisor
+
+Given `onGiveUp`, a supervisor does not escalate at once where it would give
+up. It consults an agent:
+
+```ts
+const control = yield* Supervisor.control()
+const Lead = Agent.make({ instructions: "You run the research team.", tools: control.tools })
+// ...the lead's session, and a delivery loop for its inbox
+
+yield* Supervisor.run({
+  name: "research",
+  children: [...],
+  onGiveUp: Supervisor.ask({
+    control,
+    notify: yield* Supervisor.toInbox("lead"),
+    timeout: "5 minutes",
+    grant: { restarts: 2 }
+  })
+})
+```
+
+**A consultation, step by step:**
+1. The supervisor opens a decision, and the children still running keep
+   running.
+2. `notify` tells the agent what happened. `toInbox` puts a framework system
+   message on `Messaging`'s queue.
+3. The agent looks with `list_children` and `inspect_child`. `inspect_child`
+   shows the tail of a task's latest session.
+4. It acts with `restart_child(id, instructions?)` and `stop_child(id)`.
+5. It ends with `resume(note?)`, and the supervisor carries on, or with
+   `give_up(reason)`, and it escalates with that reason.
+6. With no decision within `timeout`, the supervisor gives up as it would
+   have. An agent that fails, or never answers, cannot stall the tree.
+
+**Limits the agent cannot remove:**
+- **The budget.** `maxTokens` is never exceeded.
+- **The restart limit**, except through `grant.restarts` (default 0),
+  counted over the supervisor's life.
+- **An unknown outcome.** A child whose tool outcome is unknown cannot be
+  restarted at all.
+- **Instructions** are refused for a child that cannot take them: every
+  child except a `fresh` task.
+
+**Steering and new children.**
+- `steer_child(id, text)` gives a running task a note, framed as the
+  supervisor's, which it reads at its next turn.
+- `start_child(template, input)` starts a new child from a template declared
+  on the spec (`templates: { name: { description, make } }`). Templates are
+  listed by `list_children`.
+- The supervisor names a new child `<template>-<n>`. The model supplies only
+  the input.
+- `maxTemplateStarts` (default 8) caps how many children the agent can start,
+  and a spent budget refuses any start.
+
+**`"ask"`.** A `classify` that answers `"ask"` sends that exit to the agent,
+even where the rules would have restarted it, so an agent can decide every
+failure. With no agent configured, `"ask"` is `"escalate"`.
+
+**When the tools act.** The tools that change anything act only while a
+decision is pending. `control`'s operations (`list`, `inspect`, `restart`,
+`stop`, `steer`, `start`, `resume`, `giveUp`) are the same thing as plain
+effects, for an operator or a UI to decide with.
+
+**The supervising agent's own turns** are not charged to the supervisor's
+`maxTokens`. The agent is its own session, created before `run` and outside
+it. To cap both, provide one ambient `Budget` to both: the supervisor
+forwards its children's spending to it.
+
+**Where restarts run.** Every start runs in the supervisor's own context, so
+a restart asked for from an agent's tool call sees the supervisor's
+services, not the agent's.
+
+**The record.** `Report.decisions` records each consultation: the child, the
+reason, the actions taken, the outcome and the note.
+
 ## Scheduling & self-dispatch
 
 `affe-agent/scheduling` adds two thin things over Effect's own

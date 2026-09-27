@@ -64,10 +64,69 @@ const readBalance = Tool.make("read_balance", { /* ... */ })
   .annotate(Tool.Idempotent, true)
 ```
 
-The window this does not close: if the process dies before the engine persists
-the journal entry recording the unknown outcome, the call is unjournalled and
-a replay runs it. Only the engine's write can close that, so the guarantee is
-at-most-once for interruption, not for power loss.
+A process that *dies* inside the handler is covered too. A non-idempotent
+call journals a start marker before its handler runs. A replacement that
+finds the marker and no outcome treats the call as unknown and does not run
+it again (`test/DurableToolCrash.test.ts`).
+
+**An unknown outcome can be asked about instead.** Some outcomes can be
+checked: a payment can be looked up in the provider's dashboard. Mark such a
+tool `DurableToolkit.askWhenUnknown`, and an unknown outcome pauses the run
+with a `"tool-outcome"` request. Its `detail` is the tool name, the call id
+and the parameters. It shows in the session's pending requests on every
+transport, and the ordinary `respond` answers it:
+
+```ts
+const charge = DurableToolkit.askWhenUnknown(Tool.make("charge", { parameters, success: Receipt }))
+
+// An operator, having checked:
+yield* session.respond({ id: request.id, granted: true, value: { id: "rcpt-42" } }) // it went through
+yield* session.respond({ id: request.id, granted: false, value: "card declined" }) // it did not
+```
+
+The model sees the operator's answer: the result, or the failure. It never
+sees "unknown" dressed up as a failure it might retry. With nobody to ask,
+or with an answer that is not the tool's result, the run ends as it would
+without the annotation.
+
+**Your own nondeterminism can be journalled.** Anything that runs inside a
+submission, such as a context transform, a hook or an input renderer, can
+wrap what it must not repeat in `Journal.step`. Locally that is the identity.
+Under `/durable` it is an activity, so a replay reads the recorded value:
+
+```ts
+const recall = ContextTransform.make((context) =>
+  Journal.step("recall", Schema.Array(Schema.String), searchMemory(context)).pipe(
+    Effect.map((notes) => withNotes(context.prompt, notes))
+  )
+)
+```
+
+A step cannot fail. Model a failure as a value, so a replay receives the
+failure the first run did. Steps are named, and the same name again is its
+next occurrence, so make the same calls in the same order.
+
+**Provider fallback works.** An agent with an `ExecutionPlan`
+(`Agent.withExecutionPlan`) runs durably, batch or streamed. Each plan step
+provides its own model, so the kernel commits the whole ladder through the
+journal (`Journal.modelCall`, `Journal.modelStream`), and `/durable` records
+its outcome as one activity. A streamed ladder's text still arrives live on
+the first run. A replay returns the recorded outcome and never consults the
+plan again. Which step won is not journalled; the attempts are in telemetry.
+
+**Recovery can be explained.** Each time a client acquires a session,
+`DurableAgentClient` reconciles what a lost process may have left owed. It
+might dispatch a claim that never started, release a claim whose run ended,
+or deliver answers that were accepted but never handed over. The decision is
+`Recovery.classify`, a pure function of what the stores hold, and an
+operator can ask for it without acting on it:
+
+```ts
+const inspection = yield* Recovery.inspect({ store, sessionStore }, sessionId)
+inspection.explanation // "Submission s:submission-3 is running, and nothing is owed. It is waiting on 1 tool call(s) whose outcome is unknown, ..."
+inspection.parked      // those tool-outcome requests, to answer with respond
+inspection.findings    // where the stores disagree with themselves, if anywhere
+```
 
 A tool handler that *dies* fails the run, as it does in-process, and so does
 a model call that dies: the journal records the defect as a value so a
