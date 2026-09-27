@@ -1044,10 +1044,9 @@ owner. Client capabilities were considered and left declined (item 86).*
 
 129. **A `Journal` seam in place of the durable wrapper set (plan 2).
      Approved by the owner 2026-09-26. `PLAN.md` §30.1 is amended; slice 1
-     is built.** Today `/durable` swaps about eight things in the workflow
-     body, and the assembly is written twice (`DurableAgent`,
-     `DurableSubmission`). `ExecutionPlan` is refused, and Cloudflare cannot
-     use Workflow at all.
+     and slice 3 are built.** `/durable` swaps about eight things in the
+     workflow body. `ExecutionPlan` is refused, and Cloudflare cannot use
+     Workflow at all.
      - **Slice 1, built.** `Journal.step(name, schema, effect)`. Locally it is
        the identity. `/durable`'s `DurableJournal` backs it with an activity,
        provided in both workflow bodies. Anything that runs inside a
@@ -1069,8 +1068,14 @@ owner. Client capabilities were considered and left declined (item 86).*
           The constraint of "`step` and a few commit points" allows either.
        2. tool calls onto `step`, retiring the outcome half of
           `DurableToolkit`. The start marker stays.
-       3. one shared body assembly for `DurableAgent` and
-          `DurableSubmission`;
+       3. ~~one shared body assembly for `DurableAgent` and
+          `DurableSubmission`~~ **built 2026-09-26** as `DurableAgent.assemble`.
+          It found a bug: only `DurableAgent` refused an `ExecutionPlan`, so an
+          agent with one ran under `DurableAgentClient` with its provider
+          calls outside the journal, repeated on replay. The refusal now lives
+          in the assembly's `admit`, inside each body's scope, so under the
+          client it frees the session. Refusing before that scope left the
+          session claimed; a test pins both.
        4. a Cloudflare `Journal` over DO SQLite, so a crash there resumes
           the turn in flight.
      - **The question slice 1 settled.** `step` takes an effect that cannot
@@ -1087,8 +1092,10 @@ owner. Client capabilities were considered and left declined (item 86).*
      verify: grep "A durable agent cannot carry an ExecutionPlan" src/durable/DurableAgent.ts
      verify: grep "Workflow stalls on workerd" src/cloudflare/index.ts
      verify: grep "Amended 2026-09-26, by the owner's decision (item 129)." PLAN.md
-     verify: grep "Effect.provideService(Journal.Journal, journal)," src/durable/DurableSubmission.ts
+     verify: grep "Effect.provideService(Journal.Journal, journal)," src/durable/DurableAgent.ts
      verify: grep "a replayed turn reads the step's recorded value instead of repeating it" test/Journal.test.ts
+     verify: grep "const assembled = yield* DurableAgent.assemble(agent, { prefix: scopePrefix })" src/durable/DurableSubmission.ts
+     verify: grep "the durable client refuses an execution plan too, and frees the session" test/Durable.test.ts
      ```
 
 131. **Version the core apart from experimental subpaths (plan 6). Gated on

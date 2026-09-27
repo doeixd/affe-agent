@@ -346,6 +346,133 @@ export const capturedScheduling = (
     return ToolScheduling.all(admitted.value, host)
   })
 
+/**
+ * The substitutions every durable workflow body makes, assembled once.
+ *
+ * `workflow` here and `DurableSubmission.workflow` each built this set by
+ * hand. The copies had already drifted: only this module refused an
+ * `ExecutionPlan`, so an agent with one ran under `DurableAgentClient` with
+ * its provider calls outside the journal, repeated on every replay. That is
+ * exactly the hazard the refusal names. One assembly means one refusal.
+ *
+ * What each body still owns is what differs between them: the channels, the
+ * elicitor, the interrupt watch, the event sink.
+ *
+ * - `agent` is the agent with its toolkit, permission, strategy and input
+ *   replaced by their durable forms.
+ * - `admit` runs the checks an attempt must make before anything is
+ *   replayed: no `ExecutionPlan`, the tool contracts, then the admitted
+ *   permission policy and host scheduling. Run it inside the body's scope,
+ *   so a refusal takes the body's ordinary failure path: under
+ *   `DurableAgentClient` that path commits the terminal projection and frees
+ *   the session, where a refusal before it would leave the session claimed.
+ * - `provide` supplies the model, the journal and the admitted scheduling to
+ *   the session's run.
+ *
+ * Internal to `/durable`. Exported for `DurableSubmission`, as the helpers
+ * above are.
+ */
+export const assemble = <Tools extends Record<string, Tool.Any>, Value, Input>(
+  agent: AgentDefinition<Tools, any, any, LanguageModel.LanguageModel, Value, Input>,
+  options: {
+    /** Scopes every activity name to one submission; `""` for a body that runs one. */
+    readonly prefix: string
+    readonly toolkit?: Toolkit.WithHandler<Tools> | undefined
+  }
+) =>
+  Effect.gen(function* () {
+    const prefix = options.prefix
+    // Resolved from the agent, not defaulted to empty.
+    //
+    // This silently broke every durable submission whose model called a
+    // tool. `DurableModel` builds its parts schema with
+    // `Response.Part(toolkit)`, so an empty toolkit yields a union with no
+    // `tool-call` variant — and the first response containing a tool call
+    // failed to encode, reported as a model failure with no hint that the
+    // toolkit was the cause.
+    const toolkit = options.toolkit ?? (yield* resolveToolkit(agent.toolkit))
+    const durableTools = yield* DurableToolkit.wrap(toolkit)
+    const modelLayer = yield* DurableModel.wrap(durableTools, {
+      prefix,
+      output: agent.output,
+      toolExposure: agent.toolExposure
+    })
+    // The body's `Journal`: a step anything in the run takes is an activity
+    // here (item 129).
+    const journal = yield* DurableJournal.make(prefix)
+    // Decisions are journalled like tool calls: see `DurablePermission`.
+    // Through a ref, set to the policy this attempt may use once
+    // `DurablePermission.effective` has decided it, in `admit`.
+    const admittedPolicy = yield* Ref.make(agent.permission)
+    // The host's tool scheduling, likewise: the body runs under a delegate
+    // set once `capturedScheduling` has decided it (item 105).
+    const hostScheduling = yield* ToolScheduling.Current
+    const admittedScheduling = yield* Ref.make(hostScheduling)
+    const permission = yield* DurablePermission.wrap(
+      DurablePermission.delegating(admittedPolicy, Permission.describe(agent.permission)),
+      { prefix }
+    )
+    // As first run, not as this process is configured: see `capturedStrategy`.
+    const toolExecution = yield* capturedStrategy(agent.toolExecution, prefix)
+    const durableAgent = {
+      ...agent,
+      toolkit: durableTools,
+      permission,
+      toolExecution,
+      input: durableInput(agent.input, prefix)
+    } as AgentDefinition<Tools, any, any, any, any, any>
+
+    const admit = Effect.gen(function* () {
+      /**
+       * A plan and durability cannot both own the model call.
+       *
+       * `DurableModel` wraps the ambient `LanguageModel` so a completed call
+       * is journalled and a replay returns the recorded response instead of
+       * calling the provider again. An `ExecutionPlan` step *provides its own*
+       * `LanguageModel`, and `AgentTurn` applies the plan directly around the
+       * model call -- so the plan's layer shadows the wrapper, the provider is
+       * reached outside the journal, and a replay repeats a call that has
+       * already been made and billed. That is the one side effect
+       * `DurableModel` exists to prevent.
+       *
+       * Refused rather than run. There is no way to wrap the steps of a plan
+       * built elsewhere, so the alternatives are a silent loss of the
+       * durability guarantee or a loud refusal, and only one of those is
+       * something an operator can act on. A durable agent that needs provider
+       * fallback wants it *inside* the layer it hands to `DurableAgent`, where
+       * the journal is still outermost.
+       */
+      if (Option.isSome(agent.executionPlan)) {
+        return yield* Effect.die(
+          new Error(
+            "A durable agent cannot carry an ExecutionPlan: the plan's steps" +
+              " provide their own LanguageModel, which shadows DurableModel," +
+              " so completed provider calls would be repeated on replay." +
+              " Put the fallback inside the model layer instead."
+          )
+        )
+      }
+      // Before anything is replayed: a journal recorded under other tool
+      // contracts is refused by name, not misread (`ToolContracts`).
+      yield* ToolContracts.check(describedTools(toolkit.tools, agent), prefix)
+      // And the permission policy it was admitted under (item 105, Q6).
+      yield* Ref.set(admittedPolicy, yield* DurablePermission.effective(agent.permission, prefix))
+      yield* Ref.set(admittedScheduling, yield* capturedScheduling(hostScheduling, prefix))
+    })
+
+    const provide = <A, E, R>(self: Effect.Effect<A, E, R>) =>
+      self.pipe(
+        Effect.provide(modelLayer),
+        Effect.provideService(Journal.Journal, journal),
+        Effect.provideService(
+          ToolScheduling.Current,
+          ToolScheduling.delegating(admittedScheduling, hostScheduling.description)
+        )
+      )
+
+    return { toolkit, agent: durableAgent, admit, provide }
+  })
+
 export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
   name: string,
   agent: AgentDefinition<Tools, any, any, LanguageModel.LanguageModel, Value, Input>,
@@ -388,56 +515,8 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
       // Built inside the workflow body: activities need the workflow context,
       // and `LanguageModel.make` pins its provider's requirements, so the
       // context cannot be threaded in from outside.
-      // Resolved from the agent, not defaulted to empty.
-      //
-      // This silently broke every durable submission whose model called a
-      // tool. `DurableModel` builds its parts schema with
-      // `Response.Part(toolkit)`, so an empty toolkit yields a union with no
-      // `tool-call` variant — and the first response containing a tool call
-      // failed to encode, reported as a model failure with no hint that the
-      // toolkit was the cause. The old signature required passing the toolkit
-      // *twice*, to `Agent.make` and again here, and every existing test
-      // happened to do so, which is why it went unnoticed.
-      /**
-       * A plan and durability cannot both own the model call.
-       *
-       * `DurableModel` wraps the ambient `LanguageModel` so a completed call
-       * is journalled and a replay returns the recorded response instead of
-       * calling the provider again. An `ExecutionPlan` step *provides its own*
-       * `LanguageModel`, and `AgentTurn` applies the plan directly around the
-       * model call -- so the plan's layer shadows the wrapper, the provider is
-       * reached outside the journal, and a replay repeats a call that has
-       * already been made and billed. That is the one side effect
-       * `DurableModel` exists to prevent.
-       *
-       * Refused rather than run. There is no way to wrap the steps of a plan
-       * built elsewhere, so the alternatives are a silent loss of the
-       * durability guarantee or a loud refusal, and only one of those is
-       * something an operator can act on. A durable agent that needs provider
-       * fallback wants it *inside* the layer it hands to `DurableAgent`, where
-       * the journal is still outermost.
-       */
-      if (Option.isSome(agent.executionPlan)) {
-        return yield* Effect.die(
-          new Error(
-            "A durable agent cannot carry an ExecutionPlan: the plan's steps" +
-              " provide their own LanguageModel, which shadows DurableModel," +
-              " so completed provider calls would be repeated on replay." +
-              " Put the fallback inside the model layer instead."
-          )
-        )
-      }
-
-      const toolkit = options.toolkit ?? (yield* resolveToolkit(agent.toolkit))
-      const durableTools = yield* DurableToolkit.wrap(toolkit)
-      const modelLayer = yield* DurableModel.wrap(durableTools, {
-        output: agent.output,
-        toolExposure: agent.toolExposure
-      })
+      const assembled = yield* assemble(agent, { prefix: "", toolkit: options.toolkit })
       const channels = yield* DurableChannels.factory(options.store)
-      // The body's `Journal`: a step anything in the run takes is an activity
-      // here (item 129).
-      const journal = yield* DurableJournal.make("")
       // Substituted, not defaulted: a paused run under durability suspends the
       // workflow rather than parking a fibre, so a submission waiting on a
       // human survives the process that asked.
@@ -476,35 +555,13 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
           pending > 0 ? Deferred.succeed(requested, void 0) : Effect.void
       ).pipe(Effect.asVoid)
 
-      // Decisions are journalled like tool calls: see `DurablePermission`.
-      // Through a ref, set to the policy this attempt may use once
-      // `DurablePermission.effective` has decided it, below.
-      const admittedPolicy = yield* Ref.make(agent.permission)
-      // The host's tool scheduling, likewise: the body runs under a delegate
-      // set once `capturedScheduling` has decided it (item 105).
-      const hostScheduling = yield* ToolScheduling.Current
-      const admittedScheduling = yield* Ref.make(hostScheduling)
-      const durablePermission = yield* DurablePermission.wrap(
-        DurablePermission.delegating(admittedPolicy, Permission.describe(agent.permission))
-      )
-      const toolExecution = yield* capturedStrategy(agent.toolExecution, "")
-      const durableAgent = {
-        ...agent,
-        toolkit: durableTools,
-        permission: durablePermission,
-        toolExecution,
-        input: durableInput(agent.input, "")
-      } as AgentDefinition<Tools, any, any, any, any, any>
 
       return yield* Effect.scoped(
         Effect.gen(function* () {
           // Before anything is replayed, and inside this block so a refusal
-          // takes the ordinary failure path below: see `ToolContracts`.
-          yield* ToolContracts.check(describedTools(toolkit.tools, agent), "")
-          // And the permission policy it was admitted under (item 105, Q6).
-          yield* Ref.set(admittedPolicy, yield* DurablePermission.effective(agent.permission, ""))
-          yield* Ref.set(admittedScheduling, yield* capturedScheduling(hostScheduling, ""))
-          const session = yield* AgentSession.make(durableAgent, {
+          // takes the ordinary failure path below: see `assemble`.
+          yield* assembled.admit
+          const session = yield* AgentSession.make(assembled.agent, {
             channels,
             elicitation,
             sessionId: payload.sessionId
@@ -559,12 +616,7 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
           return result.text
         })
       ).pipe(
-        Effect.provide(modelLayer),
-        Effect.provideService(Journal.Journal, journal),
-        Effect.provideService(
-          ToolScheduling.Current,
-          ToolScheduling.delegating(admittedScheduling, hostScheduling.description)
-        ),
+        assembled.provide,
         // Interruption is deliberately not converted into a failure.
         // Suspension is signalled by interrupting the fiber, so projecting it
         // would turn every parked submission into a permanently failed one.

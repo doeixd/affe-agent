@@ -15,6 +15,9 @@ import { ExecutionPlan } from "effect"
 import * as DurableAgent from "../src/durable/DurableAgent.js"
 import * as DurableChannels from "../src/durable/DurableChannels.js"
 import * as DurableElicitation from "../src/durable/DurableElicitation.js"
+import * as DurableAgentClient from "../src/durable/DurableAgentClient.js"
+import * as DurableSessionStore from "../src/durable/DurableSessionStore.js"
+import { AgentClient } from "../src/client/index.js"
 import * as FakeModel from "./FakeModel.js"
 import { countingModel } from "./helpers.js"
 
@@ -1431,5 +1434,39 @@ describe("compaction under durability", () => {
         : String(outcome.value)
       assert.include(reported, "ExecutionPlan")
     })
+  )
+
+  /**
+   * The same refusal under `DurableAgentClient`, which runs the other workflow
+   * body. That body had no refusal until the two shared one assembly: an
+   * agent with a plan ran there with its provider calls outside the journal.
+   * The refusal is an ordinary failure of the submission, so the session is
+   * freed rather than left claimed behind it.
+   */
+  it.live("the durable client refuses an execution plan too, and frees the session", () =>
+    Effect.gen(function* () {
+      const store = yield* DurableChannels.memoryStore
+      const sessionStore = yield* DurableSessionStore.memoryStore
+      const { layer: modelLayer } = yield* FakeModel.layer([{ text: "done" }])
+      const { layer: stepLayer } = yield* FakeModel.layer([{ text: "from the plan" }])
+      const Planned = Agent.make({ instructions: "Be brief." }).pipe(
+        Agent.withExecutionPlan(ExecutionPlan.make({ provide: stepLayer }))
+      )
+      const runtime = yield* Layer.build(
+        DurableAgentClient.layer("PlannedClient", Planned, { store, sessionStore }).pipe(
+          Layer.provideMerge(Engine),
+          Layer.provideMerge(modelLayer)
+        )
+      )
+      yield* Effect.gen(function* () {
+        const client = yield* AgentClient.AgentClient
+        const session = yield* client.createSession()
+        const outcome = yield* Effect.exit(session.prompt("hello"))
+        assert.isTrue(Exit.isFailure(outcome))
+        if (Exit.isFailure(outcome)) assert.include(Cause.pretty(outcome.cause), "ExecutionPlan")
+        const record = yield* sessionStore.get(session.id)
+        assert.isTrue(Option.isSome(record) && Option.isNone(record.value.claim), "the refused submission left the session claimed")
+      }).pipe(Effect.provide(runtime))
+    }).pipe(Effect.scoped)
   )
 })

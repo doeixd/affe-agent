@@ -6687,3 +6687,14 @@ both workflow bodies, so a transform or hook can journal what it must not
 repeat. A crash test shows that a replayed turn reads the recorded value.
 The model call, tools, a shared body assembly and a Cloudflare journal are
 the next slices.
+
+## 2026-09-26 - one durable body assembly, and a refusal that was missing
+
+Item 129, slice 3. Both durable workflow bodies used to build their
+substitutions by hand. They now share `DurableAgent.assemble`, which covers
+the toolkit, the model, the journal, permission, strategy, input and host
+scheduling, along with the admission checks. The copies had drifted: only
+`DurableAgent` refused an `ExecutionPlan`. Under `DurableAgentClient`, an
+agent with a plan made its provider calls outside the journal, so a replay
+repeated them. The refusal is now in the shared admission, inside the
+body's scope, so the client frees the session afterwards.
