@@ -1083,7 +1083,13 @@ owner. Client capabilities were considered and left declined (item 86).*
           streamed submission. Refusing before that scope left the
           session claimed; a test pins both.
        4. a Cloudflare `Journal` over DO SQLite, so a crash there resumes
-          the turn in flight.
+          the turn in flight. **Depends on a decision found 2026-09-27.** It
+          pays off only if the kernel commits *every* model call, not only a
+          plan's ladder. Under `/durable` that means retiring `DurableModel`'s
+          substitution, which renames the `model-N` activities, so journals in
+          flight when the change deploys would not replay. That trade (a
+          versioned cut-over, or a compatibility reader for old names) is the
+          owner's to make before this slice starts.
      - **The question slice 1 settled.** `step` takes an effect that cannot
        fail. A typed error cannot be rebuilt from a journal without its
        schema, and a replay would then fail differently from the run it
