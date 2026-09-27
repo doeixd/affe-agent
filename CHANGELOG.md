@@ -21,6 +21,7 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - a new sessions/CurrentChild reference key joins the namespace manifest; it never crosses a wire and no existing identifier changes. (`1868ec3`; measured by `test/fixtures/namespace-manifest.json`)
 - a new durable/OnUnknownOutcome tool-annotation key joins the namespace manifest; it never crosses a wire, defaults to today's behaviour, and no existing identifier changes. (`2302d7d`; measured by `test/fixtures/namespace-manifest.json`)
 - a new Journal reference key and a JournalStepDefect error tag join the namespace and error-tag manifests; neither changes an existing identifier, and the default journal runs every step exactly as before. (`cab8dad`; measured by `test/fixtures/error-tags-manifest.json`, `test/fixtures/namespace-manifest.json`)
+- a new SupervisorLedgerError tag joins the error-tag manifest; no existing tag changes, and a supervisor without a ledger behaves exactly as before. (`3583432`; measured by `test/fixtures/error-tags-manifest.json`)
 <!-- behavior-changes:end -->
 
 ## [0.1.0] - 2026-09-17
