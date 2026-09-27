@@ -1,6 +1,6 @@
 import { Context, Effect } from "effect"
-import type { Schema } from "effect"
-import type { LanguageModel } from "effect/unstable/ai"
+import type { Schema, Stream } from "effect"
+import type { LanguageModel, Response } from "effect/unstable/ai"
 import * as Namespace from "./internal/namespace.js"
 
 /**
@@ -16,12 +16,12 @@ import * as Namespace from "./internal/namespace.js"
  *
  * The kernel still does not know durability exists. It knows only where its
  * nondeterminism is (`PLAN.md` §30.1, amended 2026-09-26). The seam is `step`
- * and one commit point, `modelCall`, on purpose.
+ * and two commit points, `modelCall` and `modelStream`, on purpose.
  *
  * **Slices 1 and 2 (item 129).** `step` is available to anything that runs
  * inside a submission: a context transform, a hook, an `Effect`-valued input
- * renderer. `modelCall` is the kernel's, for a batch model call under an
- * `ExecutionPlan`. Other model calls, tools, permission decisions and the
+ * renderer. `modelCall` and `modelStream` are the kernel's, for a model call
+ * under an `ExecutionPlan`. Other model calls, tools, permission decisions and the
  * rest are still made durable by `/durable`'s substitutions.
  *
  * ```ts
@@ -82,10 +82,24 @@ export interface Service {
   readonly modelCall: <A extends LanguageModel.GenerateTextResponse<any, any>, E, R>(
     call: Effect.Effect<A, E, R>
   ) => Effect.Effect<A, E, R>
+  /**
+   * The same commit point for a streamed call under a plan (item 129, slice
+   * 2). The parts reach the caller as they arrive on a first run, while the
+   * journal records only the completed response. A replay re-expresses that
+   * response as the parts that would have produced it. Locally it is the
+   * identity.
+   */
+  readonly modelStream: <A extends Response.StreamPart<any, any>, E, R>(
+    stream: Stream.Stream<A, E, R>
+  ) => Stream.Stream<A, E, R>
 }
 
 /** The identity journal: every step runs, and nothing is recorded. */
-export const direct: Service = { step: (_name, _schema, effect) => effect, modelCall: (call) => call }
+export const direct: Service = {
+  step: (_name, _schema, effect) => effect,
+  modelCall: (call) => call,
+  modelStream: (stream) => stream
+}
 
 /**
  * The journal the current submission records into. The default is `direct`,

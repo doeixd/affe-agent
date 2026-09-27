@@ -35,9 +35,11 @@ describe("Journal.step's types", () => {
     expectTypeOf(dated).toEqualTypeOf<Effect.Effect<Date, never, never>>()
   })
 
-  it("modelCall hands back the call's own type: value, error and requirement", () => {
+  it("modelCall and modelStream hand back the call's own type: value, error and requirement", () => {
     const call = LanguageModel.generateText({ prompt: "x" })
     expectTypeOf(Journal.direct.modelCall(call)).toEqualTypeOf<typeof call>()
+    const stream = LanguageModel.streamText({ prompt: "x" })
+    expectTypeOf(Journal.direct.modelStream(stream)).toEqualTypeOf<typeof stream>()
   })
 
   it("a step that could fail is refused: model the failure as a value", () => {
@@ -184,7 +186,7 @@ describe("DurableAgent's body provides the journal too", () => {
     }), 30_000)
 })
 
-describe("a batch model call under an ExecutionPlan, under a crash (item 129, slice 2)", () => {
+describe("a model call under an ExecutionPlan, under a crash (item 129, slice 2)", () => {
   /**
    * The plan's step provides its own model, which shadows the durable model
    * wrapper, so without the commit point every replay would ask the provider
@@ -192,7 +194,8 @@ describe("a batch model call under an ExecutionPlan, under a crash (item 129, sl
    * first turn's response from the journal, and the provider behind the plan
    * is asked exactly as often as in a run that never crashed.
    */
-  it.live("a replayed turn does not ask the plan's provider again", () =>
+  for (const stream of [false, true]) {
+  it.live(`a replayed turn does not ask the plan's provider again (${stream ? "streamed" : "batch"})`, () =>
     Effect.gen(function*() {
       const calls = yield* Ref.make(0)
       const { layer: planModel } = yield* TestLanguageModel.script(
@@ -210,7 +213,8 @@ describe("a batch model call under an ExecutionPlan, under a crash (item 129, sl
           }).pipe(Agent.withExecutionPlan(ExecutionPlan.make({ provide: TestLanguageModel.counting(planModel, calls) }))),
         // The ambient model is shadowed by the plan and never answers.
         turns: [],
-        prompt: "look it up"
+        prompt: "look it up",
+        stream
       })
       const straight = yield* DurableEquivalence.straight(planned, { database })
       assert.strictEqual(straight.text, "done")
@@ -222,4 +226,5 @@ describe("a batch model call under an ExecutionPlan, under a crash (item 129, sl
       assert.strictEqual(yield* Ref.get(calls), 2, "the plan's provider was asked again on replay")
       assert.deepStrictEqual(recovered.observation, straight)
     }), 90_000)
+  }
 })

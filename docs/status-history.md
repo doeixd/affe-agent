@@ -6710,3 +6710,13 @@ In a crash test, the plan's provider was asked twice, where it was asked
 three times without the commit. A streamed submission under a plan is still
 refused, pending the owner's choice of a streaming commit point. The commit
 adds one inventoried erasing cast in `DurableModel`, for 25 in total.
+
+## 2026-09-27 - a durable agent streams under an ExecutionPlan too
+
+Item 129, slice 2, done. `Journal` gains a second commit point,
+`modelStream`. A streamed call under a plan hands its ladder to it, and
+`/durable` records the completed response as one activity, while the parts
+still reach the session live, by the fold `DurableModel.streamText` already
+used. No plan is refused any more. A streamed crash test asks the plan's
+provider twice, and three times without the commit. Both commit points share
+the one inventoried cast, so the count stays at 25.

@@ -27,13 +27,17 @@ export class JournalStepDefect extends Schema.TaggedError<JournalStepDefect>()("
 }
 
 /**
- * `modelCall` comes from `DurableModel.wrapWithCommit`, which owns the
- * response codec; `DurableAgent.assemble` passes it. Without one it is the
- * identity, so the call runs unrecorded, as it would locally.
+ * `modelCall` and `modelStream` come from `DurableModel.wrapWithCommit`,
+ * which owns the response codec; `DurableAgent.assemble` passes them.
+ * Without them they are the identity, so the call runs unrecorded, as it
+ * would locally.
  */
 export const make = (
   prefix: string,
-  options?: { readonly modelCall?: Journal.Service["modelCall"] | undefined }
+  options?: {
+    readonly modelCall?: Journal.Service["modelCall"] | undefined
+    readonly modelStream?: Journal.Service["modelStream"] | undefined
+  }
 ): Effect.Effect<Journal.Service, never, WorkflowContext> =>
   Effect.gen(function*() {
     const workflowContext = yield* Effect.context<WorkflowContext>()
@@ -72,5 +76,9 @@ export const make = (
           : yield* Effect.die(new JournalStepDefect({ step: activity, failure: outcome.failure }))
       })
 
-    return { step, modelCall: options?.modelCall ?? Journal.direct.modelCall }
+    return {
+      step,
+      modelCall: options?.modelCall ?? Journal.direct.modelCall,
+      modelStream: options?.modelStream ?? Journal.direct.modelStream
+    }
   })

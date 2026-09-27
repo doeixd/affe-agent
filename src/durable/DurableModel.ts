@@ -154,7 +154,8 @@ export const wrapWithCommit = <Tools extends Record<string, Tool.Any>>(
 ): Effect.Effect<
   {
     readonly layer: Layer.Layer<LanguageModel.LanguageModel>
-    readonly commit: Journal.Service["modelCall"]
+    readonly modelCall: Journal.Service["modelCall"]
+    readonly modelStream: Journal.Service["modelStream"]
   },
   never,
   LanguageModel.LanguageModel | WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
@@ -279,6 +280,78 @@ export const wrapWithCommit = <Tools extends Record<string, Tool.Any>>(
      * going through `service.generateText` would mean re-entering Effect AI's
      * overloads, which erase the tool types the harness depends on.
      */
+    /**
+     * The live path: a stream, folded into the completed response the
+     * journal keeps, with each part handed to the harness as it arrives.
+     * This runs exactly once -- a replay never enters an activity's
+     * `execute` -- so deltas are delivered live on the first run and never
+     * twice.
+     */
+    const liveFold = <R>(
+      stream: Stream.Stream<Response.StreamPart<Tools, "encoded">, unknown, R>,
+      tap: (part: Response.StreamPart<Tools, "encoded">) => void
+    ) =>
+      Stream.runFoldEffect(
+        stream,
+        () => Accumulator.empty<Tools>(),
+        (state, part) => {
+          const next = Accumulator.step(state, part)
+          if (next._tag === "Failed") {
+            return Effect.fail(
+              new AiError.InternalProviderError({
+                description: Accumulator.describeStreamError(next.error)
+              })
+            )
+          }
+          tap(part)
+          return Effect.succeed(next.state)
+        }
+      ).pipe(
+        Effect.map(
+          (state) =>
+            new LanguageModel.GenerateTextResponse<Tools>([
+              ...Accumulator.finish(state)
+            ] as Array<Response.Part<Tools, any>>)
+        )
+      )
+
+    /**
+     * A journalled call, as the stream a caller reads. On a first run the
+     * parts arrive live, tapped from inside the activity. On a replay the
+     * journal answers at once, and the recorded response is re-expressed as
+     * the parts that would have produced it.
+     */
+    const asLiveStream = <R>(
+      run: (
+        tap: (part: Response.StreamPart<Tools, "encoded">) => void
+      ) => Effect.Effect<LanguageModel.GenerateTextResponse<any, any>, unknown, R>
+    ) =>
+      Stream.callback<Response.StreamPart<Tools, "encoded">, unknown, R>((queue) =>
+        Effect.gen(function* () {
+          let live = false
+          // Runs in the callback's own fibre while the consumer reads.
+          const exit = yield* Effect.exit(
+            run((part) => {
+              live = true
+              Queue.offerUnsafe(queue, part)
+            })
+          )
+          if (exit._tag === "Failure") {
+            Queue.failCauseUnsafe(queue, exit.cause)
+            return
+          }
+          if (!live) {
+            // A replay, or a provider whose stream produced nothing: the
+            // journalled response, as the parts that would have produced it.
+            Queue.offerAllUnsafe(
+              queue,
+              streamPartsFor(exit.value.content as ReadonlyArray<Response.Part<Tools, "encoded">>)
+            )
+          }
+          Queue.endUnsafe(queue)
+        })
+      )
+
     const durableGenerate = (
       options: any,
       /** On a first run, every provider stream part as it arrives. Absent on the batch path. */
@@ -295,48 +368,29 @@ export const wrapWithCommit = <Tools extends Record<string, Tool.Any>>(
               LanguageModel.GenerateTextResponse<Tools>,
               unknown
             >)
-            : // The live path: the provider's stream, folded into the
-              // completed response the journal keeps, with each part
-              // handed to the harness as it arrives. This runs exactly
-              // once -- a replay never enters `execute` -- so deltas
-              // are delivered live on the first run and never twice.
-              Stream.runFoldEffect(
-                underlying.streamText(options) as Stream.Stream<
-                  Response.StreamPart<Tools, "encoded">,
-                  unknown
-                >,
-                () => Accumulator.empty<Tools>(),
-                (state, part) => {
-                  const next = Accumulator.step(state, part)
-                  if (next._tag === "Failed") {
-                    return Effect.fail(
-                      new AiError.InternalProviderError({
-                        description: Accumulator.describeStreamError(next.error)
-                      })
-                    )
-                  }
-                  tap(part)
-                  return Effect.succeed(next.state)
-                }
-              ).pipe(
-                Effect.map(
-                  (state) =>
-                    new LanguageModel.GenerateTextResponse<Tools>([
-                      ...Accumulator.finish(state)
-                    ] as Array<Response.Part<Tools, any>>)
-                )
-              ),
+            : liveFold(
+              underlying.streamText(options) as Stream.Stream<
+                Response.StreamPart<Tools, "encoded">,
+                unknown
+              >,
+              tap
+            ),
           tap
         ))
 
-    // The plan's ladder, as one journalled call: see `wrapWithCommit`. The
-    // cast widens as `generateText`'s below does, and for the same reason:
-    // a recorded failure comes back as a `DurableModelFailure`, not as the
-    // provider's own error, and the body projects it either way.
+    // The plan's ladder, as one journalled call: see `wrapWithCommit`. One
+    // counter for both commit points, since a submission streams or it does
+    // not. The cast widens as `generateText`'s below does, and for the same
+    // reason: a recorded failure comes back as a `DurableModelFailure`, not
+    // as the provider's own error, and the body projects it either way.
     const planIndex = yield* Ref.make(0)
-    const commit = ((call: Effect.Effect<LanguageModel.GenerateTextResponse<Tools>, unknown, unknown>) =>
-      Effect.flatMap(Ref.getAndUpdate(planIndex, (n) => n + 1), (index) =>
-        record(`${prefix}model-plan-${index}`, call))) as unknown as Journal.Service["modelCall"]
+    const planName = Effect.map(Ref.getAndUpdate(planIndex, (n) => n + 1), (index) => `${prefix}model-plan-${index}`)
+    const commits = {
+      modelCall: (call: Effect.Effect<LanguageModel.GenerateTextResponse<Tools>, unknown, unknown>) =>
+        Effect.flatMap(planName, (name) => record(name, call)),
+      modelStream: (stream: Stream.Stream<Response.StreamPart<Tools, "encoded">, unknown, unknown>) =>
+        asLiveStream((tap) => Effect.flatMap(planName, (name) => record(name, liveFold(stream, tap), tap)))
+    } as unknown as Pick<Journal.Service, "modelCall" | "modelStream">
 
     const service: LanguageModel.LanguageModel = {
       ...underlying,
@@ -363,34 +417,10 @@ export const wrapWithCommit = <Tools extends Record<string, Tool.Any>>(
       // What is guaranteed either way is that a streamed durable submission
       // commits exactly the history a batched one does.
       streamText: ((options: any) =>
-        Stream.callback<Response.StreamPart<Tools, "encoded">, unknown>((queue) =>
-          Effect.gen(function* () {
-            let live = false
-            // Runs in the callback's own fibre while the consumer reads.
-            const exit = yield* Effect.exit(
-              durableGenerate(options, (part) => {
-                live = true
-                Queue.offerUnsafe(queue, part)
-              })
-            )
-            if (exit._tag === "Failure") {
-              Queue.failCauseUnsafe(queue, exit.cause)
-              return
-            }
-            if (!live) {
-              // A replay, or a provider whose stream produced nothing: the
-              // journalled response, as the parts that would have produced it.
-              Queue.offerAllUnsafe(
-                queue,
-                streamPartsFor(exit.value.content as ReadonlyArray<Response.Part<Tools, "encoded">>)
-              )
-            }
-            Queue.endUnsafe(queue)
-          })
-        )) as unknown as LanguageModel.LanguageModel["streamText"]
+        asLiveStream((tap) => durableGenerate(options, tap))) as unknown as LanguageModel.LanguageModel["streamText"]
     }
 
-    return { layer: Layer.succeed(LanguageModel.LanguageModel, service), commit }
+    return { layer: Layer.succeed(LanguageModel.LanguageModel, service), ...commits }
   })
 
 /** Wrap an existing `LanguageModel` so its responses are persisted. See `wrapWithCommit`. */

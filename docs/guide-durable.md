@@ -106,14 +106,13 @@ A step cannot fail. Model a failure as a value, so a replay receives the
 failure the first run did. Steps are named, and the same name again is its
 next occurrence, so make the same calls in the same order.
 
-**Provider fallback works on batch submissions.** An agent with an
-`ExecutionPlan` (`Agent.withExecutionPlan`) runs durably when it does not
-stream. Each plan step provides its own model, so the kernel commits the whole
-ladder through `Journal.modelCall`, and `/durable` journals its outcome as
-one activity. A replay returns that outcome and never consults the plan
-again. Which step won is not journalled; the attempts are in telemetry. A
-*streamed* submission under a plan is refused, because a streamed call's live
-deltas cannot yet be committed that way.
+**Provider fallback works.** An agent with an `ExecutionPlan`
+(`Agent.withExecutionPlan`) runs durably, batch or streamed. Each plan step
+provides its own model, so the kernel commits the whole ladder through the
+journal (`Journal.modelCall`, `Journal.modelStream`), and `/durable` records
+its outcome as one activity. A streamed ladder's text still arrives live on
+the first run. A replay returns the recorded outcome and never consults the
+plan again. Which step won is not journalled; the attempts are in telemetry.
 
 **Recovery can be explained.** Each time a client acquires a session,
 `DurableAgentClient` reconciles what a lost process may have left owed. It

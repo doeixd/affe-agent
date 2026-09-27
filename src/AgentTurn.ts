@@ -364,6 +364,15 @@ const commitUnderPlan = <A extends LanguageModel.GenerateTextResponse<any, any>,
     ? call
     : Effect.flatMap(Journal.Journal, (journal) => journal.modelCall(call))
 
+/** `commitUnderPlan`, for the streamed call: `Journal.modelStream`. */
+const commitStreamUnderPlan = <A extends Response.StreamPart<any, any>, E, R>(
+  session: Session<any, any, any>,
+  stream: Stream.Stream<A, E, R>
+): Stream.Stream<A, E, R> =>
+  Option.isNone(session.agent.executionPlan)
+    ? stream
+    : Stream.unwrap(Effect.map(Journal.Journal, (journal) => journal.modelStream(stream)))
+
 /**
  * The same, for the streamed model call.
  *
@@ -438,14 +447,17 @@ const streamResponse = <Tools extends Record<string, Tool.Any>>(
     )
 
     const final = yield* Stream.runFoldEffect(
-      withPlanStream(
+      commitStreamUnderPlan(
         session,
-        LanguageModel.streamText({
-          prompt: context,
-          toolkit: handler,
-          disableToolCallResolution: true,
-          ...choiceFor(exposed)
-        })
+        withPlanStream(
+          session,
+          LanguageModel.streamText({
+            prompt: context,
+            toolkit: handler,
+            disableToolCallResolution: true,
+            ...choiceFor(exposed)
+          })
+        )
       ),
       () => Accumulator.empty<Tools>(),
       (state, part: Response.StreamPart<Tools, "encoded">) => {

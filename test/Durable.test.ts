@@ -1392,10 +1392,10 @@ describe("compaction under durability", () => {
    * model call.
    *
    * `DurableModel` wraps the ambient `LanguageModel`; an `ExecutionPlan` step
-   * provides its own, which shadows the wrapper. A batch call under a plan is
-   * therefore committed whole through `Journal.modelCall`, which the durable
-   * body backs with the model's codec. A streamed call cannot be committed
-   * that way yet, and stays refused.
+   * provides its own, which shadows the wrapper. A call under a plan is
+   * therefore committed whole through `Journal.modelCall` or
+   * `Journal.modelStream`, which the durable body backs with the model's
+   * codec.
    */
   it.live("a durable agent runs a batch call through its execution plan", () =>
     Effect.gen(function* () {
@@ -1414,41 +1414,36 @@ describe("compaction under durability", () => {
     })
   )
 
-  it.live("a durable agent streaming under an execution plan is refused", () =>
+  it.live("a durable agent streams through its execution plan too", () =>
     Effect.gen(function* () {
-      const { layer: modelLayer } = yield* FakeModel.layer([{ text: "done" }])
+      const { layer: modelLayer } = yield* FakeModel.layer([{ text: "from the ambient model" }])
       const store = yield* DurableChannels.memoryStore
       const { layer: stepLayer } = yield* FakeModel.layer([{ text: "from the plan" }])
       const Planned = Agent.make({ instructions: "Be brief." }).pipe(
         Agent.withExecutionPlan(ExecutionPlan.make({ provide: stepLayer }))
       )
       const durable = DurableAgent.workflow("PlannedStream", Planned, { store, stream: true })
-      const outcome = yield* Effect.exit(
-        Effect.gen(function* () {
-          const executionId = yield* DurableAgent.submit(durable, store, "planned-stream-1", "hello")
-          return yield* DurableAgent.result(durable, executionId)
-        }).pipe(Effect.provide(durable.layer.pipe(Layer.provideMerge(Engine), Layer.provideMerge(modelLayer))))
-      )
-      // However the workflow surfaces it, the run does not quietly succeed
-      // with the journal bypassed.
-      const reported = Exit.isFailure(outcome) ? String(outcome.cause) : String(outcome.value)
-      assert.include(reported, "ExecutionPlan")
+      const exit = yield* Effect.gen(function* () {
+        const executionId = yield* DurableAgent.submit(durable, store, "planned-stream-1", "hello")
+        return yield* DurableAgent.result(durable, executionId)
+      }).pipe(Effect.provide(durable.layer.pipe(Layer.provideMerge(Engine), Layer.provideMerge(modelLayer))))
+      assert.deepStrictEqual(exit, Exit.succeed("from the plan"))
     })
   )
 
   /**
-   * The same refusal under `DurableAgentClient`, which runs the other
-   * workflow body. That body had no refusal at all until the two shared one
-   * assembly: an agent with a plan ran there with its provider calls outside
-   * the journal. The refusal is an ordinary failure of the submission, so
-   * the session is freed rather than left claimed behind it.
+   * Under `DurableAgentClient`, the other workflow body. It had no refusal
+   * at all until the two bodies shared one assembly, so an agent with a plan
+   * ran there with its provider calls outside the journal. Now both bodies
+   * commit the plan's ladder, and the client's live stream still delivers
+   * the plan's text as it arrives.
    */
-  it.live("the durable client refuses streaming under an execution plan, and frees the session", () =>
+  it.live("the durable client runs an execution plan, batch and streamed, and leaves the session idle", () =>
     Effect.gen(function* () {
       const store = yield* DurableChannels.memoryStore
       const sessionStore = yield* DurableSessionStore.memoryStore
-      const { layer: modelLayer } = yield* FakeModel.layer([{ text: "done" }])
-      const { layer: stepLayer } = yield* FakeModel.layer([{ text: "from the plan" }])
+      const { layer: modelLayer } = yield* FakeModel.layer([{ text: "from the ambient model" }])
+      const { layer: stepLayer } = yield* FakeModel.layer([{ text: "from the plan" }, { text: "from the plan again" }])
       const Planned = Agent.make({ instructions: "Be brief." }).pipe(
         Agent.withExecutionPlan(ExecutionPlan.make({ provide: stepLayer }))
       )
@@ -1461,14 +1456,10 @@ describe("compaction under durability", () => {
       yield* Effect.gen(function* () {
         const client = yield* AgentClient.AgentClient
         const session = yield* client.createSession()
-        const outcome = yield* Effect.exit(session.prompt("hello", { stream: true }))
-        assert.isTrue(Exit.isFailure(outcome))
-        if (Exit.isFailure(outcome)) assert.include(Cause.pretty(outcome.cause), "ExecutionPlan")
+        assert.strictEqual((yield* session.prompt("hello", { stream: true })).text, "from the plan")
+        assert.strictEqual((yield* session.prompt("again")).text, "from the plan again")
         const record = yield* sessionStore.get(session.id)
-        assert.isTrue(Option.isSome(record) && Option.isNone(record.value.claim), "the refused submission left the session claimed")
-        // Batch is not refused: the plan's answer, journalled.
-        const batch = yield* session.prompt("again")
-        assert.strictEqual(batch.text, "from the plan")
+        assert.isTrue(Option.isSome(record) && Option.isNone(record.value.claim), "a finished submission left the session claimed")
       }).pipe(Effect.provide(runtime))
     }).pipe(Effect.scoped)
   )

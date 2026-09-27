@@ -95,8 +95,9 @@ The erasing casts in `src/` are structural, and each is documented at the site:
   (`DurableModel.ts:129`), where a workflow activity's `execute` must be typed
   against the schema the journal declares, and the underlying effect's error is
   the caller's own `E`;
-* **committing a plan's ladder** (`DurableModel.wrapWithCommit`'s `commit`,
-  the fifth in that file). `Journal.modelCall` promises the caller's own `E`,
+* **committing a plan's ladder** (`DurableModel.wrapWithCommit`'s `commits`,
+  the fifth in that file, one cast for both commit points).
+  `Journal.modelCall` and `modelStream` promise the caller's own `E`,
   because locally it is the identity. The durable commit raises a recorded
   failure as `DurableModelFailure` on replay, the same widening the
   substituted `generateText` already makes, and the body projects both alike.

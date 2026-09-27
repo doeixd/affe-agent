@@ -361,7 +361,7 @@ export const capturedScheduling = (
  * - `agent` is the agent with its toolkit, permission, strategy and input
  *   replaced by their durable forms.
  * - `admit` runs the checks an attempt must make before anything is
- *   replayed: no `ExecutionPlan` on a streamed submission, the tool contracts, then the admitted
+ *   replayed: the tool contracts, then the admitted
  *   permission policy and host scheduling. Run it inside the body's scope,
  *   so a refusal takes the body's ordinary failure path: under
  *   `DurableAgentClient` that path commits the terminal projection and frees
@@ -377,8 +377,6 @@ export const assemble = <Tools extends Record<string, Tool.Any>, Value, Input>(
   options: {
     /** Scopes every activity name to one submission; `""` for a body that runs one. */
     readonly prefix: string
-    /** Whether the submission streams. A plan is refused only then. */
-    readonly stream: boolean
     readonly toolkit?: Toolkit.WithHandler<Tools> | undefined
   }
 ) =>
@@ -400,9 +398,12 @@ export const assemble = <Tools extends Record<string, Tool.Any>, Value, Input>(
       toolExposure: agent.toolExposure
     })
     // The body's `Journal`: a step anything in the run takes is an activity
-    // here, and a batch call under a plan is committed through the model's
-    // codec (item 129).
-    const journal = yield* DurableJournal.make(prefix, { modelCall: model.commit })
+    // here, and a model call under a plan, batch or streamed, is committed
+    // through the model's codec (item 129).
+    const journal = yield* DurableJournal.make(prefix, {
+      modelCall: model.modelCall,
+      modelStream: model.modelStream
+    })
     // Decisions are journalled like tool calls: see `DurablePermission`.
     // Through a ref, set to the policy this attempt may use once
     // `DurablePermission.effective` has decided it, in `admit`.
@@ -426,34 +427,6 @@ export const assemble = <Tools extends Record<string, Tool.Any>, Value, Input>(
     } as AgentDefinition<Tools, any, any, any, any, any>
 
     const admit = Effect.gen(function* () {
-      /**
-       * A streamed call under a plan is refused; a batch one is journalled.
-       *
-       * `DurableModel` journals a model call by wrapping the ambient
-       * `LanguageModel`. An `ExecutionPlan` step *provides its own*
-       * `LanguageModel`, which shadows the wrapper, so a plan's calls would
-       * reach the provider outside the journal and a replay would repeat
-       * calls already made and billed. For a batch call the kernel hands the
-       * whole ladder to `Journal.modelCall`, which this body backs with the
-       * same codec, so the ladder's outcome is one journalled activity (item
-       * 129, slice 2).
-       *
-       * A streamed call cannot be committed that way yet: its deltas are
-       * delivered live from inside the model activity, and `modelCall`
-       * returns only the completed response. Until the owner chooses how a
-       * streaming commit point should look, that pairing is refused loudly
-       * rather than run with the guarantee silently lost.
-       */
-      if (options.stream && Option.isSome(agent.executionPlan)) {
-        return yield* Effect.die(
-          new Error(
-            "A durable agent cannot stream under an ExecutionPlan: the plan's steps" +
-              " provide their own LanguageModel, which shadows DurableModel, and a" +
-              " streamed call cannot yet be journalled as one ladder. Submit without" +
-              " streaming, or put the fallback inside the model layer."
-          )
-        )
-      }
       // Before anything is replayed: a journal recorded under other tool
       // contracts is refused by name, not misread (`ToolContracts`).
       yield* ToolContracts.check(describedTools(toolkit.tools, agent), prefix)
@@ -517,11 +490,7 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
       // Built inside the workflow body: activities need the workflow context,
       // and `LanguageModel.make` pins its provider's requirements, so the
       // context cannot be threaded in from outside.
-      const assembled = yield* assemble(agent, {
-        prefix: "",
-        stream: options.stream === true,
-        toolkit: options.toolkit
-      })
+      const assembled = yield* assemble(agent, { prefix: "", toolkit: options.toolkit })
       const channels = yield* DurableChannels.factory(options.store)
       // Substituted, not defaulted: a paused run under durability suspends the
       // workflow rather than parking a fibre, so a submission waiting on a
