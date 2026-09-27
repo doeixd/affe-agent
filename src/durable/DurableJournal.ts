@@ -1,7 +1,7 @@
 import { Cause, Effect, Ref, Schema } from "effect"
 import { Activity } from "effect/unstable/workflow"
 import * as AgentEvent from "../AgentEvent.js"
-import type * as Journal from "../Journal.js"
+import * as Journal from "../Journal.js"
 import type { WorkflowContext } from "./DurableToolkit.js"
 
 /**
@@ -26,7 +26,15 @@ export class JournalStepDefect extends Schema.TaggedError<JournalStepDefect>()("
   }
 }
 
-export const make = (prefix: string): Effect.Effect<Journal.Service, never, WorkflowContext> =>
+/**
+ * `modelCall` comes from `DurableModel.wrapWithCommit`, which owns the
+ * response codec; `DurableAgent.assemble` passes it. Without one it is the
+ * identity, so the call runs unrecorded, as it would locally.
+ */
+export const make = (
+  prefix: string,
+  options?: { readonly modelCall?: Journal.Service["modelCall"] | undefined }
+): Effect.Effect<Journal.Service, never, WorkflowContext> =>
   Effect.gen(function*() {
     const workflowContext = yield* Effect.context<WorkflowContext>()
     const seen = yield* Ref.make(new Map<string, number>())
@@ -64,5 +72,5 @@ export const make = (prefix: string): Effect.Effect<Journal.Service, never, Work
           : yield* Effect.die(new JournalStepDefect({ step: activity, failure: outcome.failure }))
       })
 
-    return { step }
+    return { step, modelCall: options?.modelCall ?? Journal.direct.modelCall }
   })

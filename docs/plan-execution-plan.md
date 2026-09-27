@@ -144,6 +144,11 @@ so nobody goes looking for it in a plan.
 
 ## Interaction with `/durable`
 
+**Built 2026-09-27 for the batch path (item 129, slice 2).** The kernel hands
+a batch call under a plan to `Journal.modelCall`, and `/durable` journals the
+whole ladder as one activity through `DurableModel`'s codec: the design this
+section describes. A streamed submission under a plan is still refused.
+
 A durable run journals each model call as an activity (`DurableModel`), and the
 journal records the **outcome**, not the path taken to it. So a plan that
 falls back on the first execution and is replayed later replays the recorded

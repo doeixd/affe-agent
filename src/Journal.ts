@@ -1,5 +1,6 @@
 import { Context, Effect } from "effect"
 import type { Schema } from "effect"
+import type { LanguageModel } from "effect/unstable/ai"
 import * as Namespace from "./internal/namespace.js"
 
 /**
@@ -14,13 +15,14 @@ import * as Namespace from "./internal/namespace.js"
  * effect again.
  *
  * The kernel still does not know durability exists. It knows only where its
- * nondeterminism is (`PLAN.md` §30.1, amended 2026-09-26). The seam is this
- * one operation, on purpose.
+ * nondeterminism is (`PLAN.md` §30.1, amended 2026-09-26). The seam is `step`
+ * and one commit point, `modelCall`, on purpose.
  *
- * **Slice 1 (item 129).** Available to anything that runs inside a submission:
- * a context transform, a hook, an `Effect`-valued input renderer. The model
- * call, tools, permission decisions and the rest are still made durable by
- * `/durable`'s substitutions. Moving them onto `step` is the later slices'.
+ * **Slices 1 and 2 (item 129).** `step` is available to anything that runs
+ * inside a submission: a context transform, a hook, an `Effect`-valued input
+ * renderer. `modelCall` is the kernel's, for a batch model call under an
+ * `ExecutionPlan`. Other model calls, tools, permission decisions and the
+ * rest are still made durable by `/durable`'s substitutions.
  *
  * ```ts
  * const recall = ContextTransform.make((context) =>
@@ -62,10 +64,28 @@ export interface Service {
     schema: Schema.Codec<A, I>,
     effect: Effect.Effect<A, never, R>
   ) => Effect.Effect<A, never, R>
+  /**
+   * A commit point: a model call the kernel makes under an `ExecutionPlan`,
+   * the whole fallback ladder at once (item 129, slice 2).
+   *
+   * Not a `step`, for two reasons. The response's schema depends on the
+   * turn's tools, which only the durable model wrapper knows how to encode.
+   * And a model call can fail, where a step cannot: a provider failure is
+   * recorded as a value and raised again on replay, as `DurableModel`
+   * already does for every other model call.
+   *
+   * Why only under a plan: without one, `/durable` journals the call by
+   * substituting the `LanguageModel`. A plan's steps provide their own
+   * `LanguageModel`, which shadows that substitution, so the kernel commits
+   * the ladder's outcome here instead. Locally it is the identity.
+   */
+  readonly modelCall: <A extends LanguageModel.GenerateTextResponse<any, any>, E, R>(
+    call: Effect.Effect<A, E, R>
+  ) => Effect.Effect<A, E, R>
 }
 
 /** The identity journal: every step runs, and nothing is recorded. */
-export const direct: Service = { step: (_name, _schema, effect) => effect }
+export const direct: Service = { step: (_name, _schema, effect) => effect, modelCall: (call) => call }
 
 /**
  * The journal the current submission records into. The default is `direct`,

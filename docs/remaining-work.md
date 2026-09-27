@@ -1043,29 +1043,34 @@ owner. Client capabilities were considered and left declined (item 86).*
      ```
 
 129. **A `Journal` seam in place of the durable wrapper set (plan 2).
-     Approved by the owner 2026-09-26. `PLAN.md` §30.1 is amended; slice 1
-     and slice 3 are built.** `/durable` swaps about eight things in the
-     workflow body. `ExecutionPlan` is refused, and Cloudflare cannot use
-     Workflow at all.
+     Approved by the owner 2026-09-26. `PLAN.md` §30.1 is amended; slices
+     1 and 3, and the batch half of 2, are built.** `/durable` swaps about
+     eight things in the workflow body. `ExecutionPlan` is refused on a
+     streamed submission, and Cloudflare cannot use Workflow at all.
      - **Slice 1, built.** `Journal.step(name, schema, effect)`. Locally it is
        the identity. `/durable`'s `DurableJournal` backs it with an activity,
        provided in both workflow bodies. Anything that runs inside a
        submission can use it (a transform, a hook, a renderer). A crash test
        shows a transform's step is not repeated on replay.
      - **Next slices**, each with the equivalence oracle holding:
-       1. the model call onto `step`, which retires `DurableModel` and lets
-          a durable agent carry an `ExecutionPlan`, since the step then wraps
-          the whole ladder. **One open question for the owner.** A streamed
-          durable call hands the provider's deltas to the session live, from
-          inside the model activity, and journals only the completed
-          response. A plain `step(name, schema, effect)` cannot express that
-          tap. The choices are:
-          - a second operation, a streaming commit point: a step whose
-            effect emits as it runs and records only its result;
-          - leaving streamed calls on `DurableModel`, and moving the batch
-            path (and `ExecutionPlan`) first.
+       1. **The model call. Batch half built 2026-09-27**, batch-first as
+          recommended when the owner had not yet chosen. `Journal` gained
+          one commit point, `modelCall`, which the kernel uses only for a
+          batch call under an `ExecutionPlan`: the whole ladder is journalled
+          as one `model-plan-N` activity, through `DurableModel`'s codec
+          (`wrapWithCommit`). A durable agent now carries a plan on batch
+          submissions. A crash test counts the plan's provider calls, 2 with
+          the commit and 3 without it. Other model calls stay on
+          `DurableModel`, whose activity names are unchanged, so journals in
+          flight still replay.
 
-          The constraint of "`step` and a few commit points" allows either.
+          **Still open, for the owner: streaming.** A streamed durable call
+          hands the provider's deltas to the session live, from inside the
+          model activity, and journals only the completed response, and
+          `modelCall` returns only a response. The choices are a streaming
+          commit point, which emits as it runs and records its result, or
+          leaving streamed calls on `DurableModel` for good. Until then a
+          streamed submission under a plan is refused.
        2. tool calls onto `step`, retiring the outcome half of
           `DurableToolkit`. The start marker stays.
        3. ~~one shared body assembly for `DurableAgent` and
@@ -1074,7 +1079,8 @@ owner. Client capabilities were considered and left declined (item 86).*
           agent with one ran under `DurableAgentClient` with its provider
           calls outside the journal, repeated on replay. The refusal now lives
           in the assembly's `admit`, inside each body's scope, so under the
-          client it frees the session. Refusing before that scope left the
+          client it frees the session. Since slice 2 it refuses only a
+          streamed submission. Refusing before that scope left the
           session claimed; a test pins both.
        4. a Cloudflare `Journal` over DO SQLite, so a crash there resumes
           the turn in flight.
@@ -1089,13 +1095,14 @@ owner. Client capabilities were considered and left declined (item 86).*
      Large, in slices.
 
      ```text
-     verify: grep "A durable agent cannot carry an ExecutionPlan" src/durable/DurableAgent.ts
+     verify: grep "A durable agent cannot stream under an ExecutionPlan" src/durable/DurableAgent.ts
      verify: grep "Workflow stalls on workerd" src/cloudflare/index.ts
      verify: grep "Amended 2026-09-26, by the owner's decision (item 129)." PLAN.md
      verify: grep "Effect.provideService(Journal.Journal, journal)," src/durable/DurableAgent.ts
      verify: grep "a replayed turn reads the step's recorded value instead of repeating it" test/Journal.test.ts
-     verify: grep "const assembled = yield* DurableAgent.assemble(agent, { prefix: scopePrefix })" src/durable/DurableSubmission.ts
-     verify: grep "the durable client refuses an execution plan too, and frees the session" test/Durable.test.ts
+     verify: grep "const assembled = yield* DurableAgent.assemble(agent, { prefix: scopePrefix, stream: payload.stream })" src/durable/DurableSubmission.ts
+     verify: grep "the durable client refuses streaming under an execution plan, and frees the session" test/Durable.test.ts
+     verify: grep "a replayed turn does not ask the plan's provider again" test/Journal.test.ts
      ```
 
 131. **Version the core apart from experimental subpaths (plan 6). Gated on

@@ -1388,62 +1388,62 @@ describe("compaction under durability", () => {
   )
 
   /**
-   * R37 -- a plan and durability cannot both own the model call.
+   * R37, revised by item 129 slice 2 -- a plan and durability both touch the
+   * model call.
    *
-   * `DurableModel` wraps the ambient `LanguageModel` so a completed call is
-   * journalled and a replay returns the recorded response rather than calling
-   * the provider again. An `ExecutionPlan` step *provides its own*
-   * `LanguageModel`, and `AgentTurn` applies the plan directly around the
-   * model call -- so the plan's layer shadows the wrapper, the provider is
-   * reached outside the journal, and a replay repeats a call that has already
-   * been made and billed.
-   *
-   * There is no way to wrap the steps of a plan built elsewhere, so the
-   * choice is between silently losing the durability guarantee and refusing
-   * loudly. Only one of those is something an operator can act on.
+   * `DurableModel` wraps the ambient `LanguageModel`; an `ExecutionPlan` step
+   * provides its own, which shadows the wrapper. A batch call under a plan is
+   * therefore committed whole through `Journal.modelCall`, which the durable
+   * body backs with the model's codec. A streamed call cannot be committed
+   * that way yet, and stays refused.
    */
-  it.live("a durable agent carrying an execution plan is refused", () =>
+  it.live("a durable agent runs a batch call through its execution plan", () =>
+    Effect.gen(function* () {
+      const { layer: modelLayer } = yield* FakeModel.layer([{ text: "from the ambient model" }])
+      const store = yield* DurableChannels.memoryStore
+      const { layer: stepLayer } = yield* FakeModel.layer([{ text: "from the plan" }])
+      const Planned = Agent.make({ instructions: "Be brief." }).pipe(
+        Agent.withExecutionPlan(ExecutionPlan.make({ provide: stepLayer }))
+      )
+      const durable = DurableAgent.workflow("PlannedBatch", Planned, { store })
+      const exit = yield* Effect.gen(function* () {
+        const executionId = yield* DurableAgent.submit(durable, store, "planned-batch-1", "hello")
+        return yield* DurableAgent.result(durable, executionId)
+      }).pipe(Effect.provide(durable.layer.pipe(Layer.provideMerge(Engine), Layer.provideMerge(modelLayer))))
+      assert.deepStrictEqual(exit, Exit.succeed("from the plan"))
+    })
+  )
+
+  it.live("a durable agent streaming under an execution plan is refused", () =>
     Effect.gen(function* () {
       const { layer: modelLayer } = yield* FakeModel.layer([{ text: "done" }])
       const store = yield* DurableChannels.memoryStore
       const { layer: stepLayer } = yield* FakeModel.layer([{ text: "from the plan" }])
-
       const Planned = Agent.make({ instructions: "Be brief." }).pipe(
         Agent.withExecutionPlan(ExecutionPlan.make({ provide: stepLayer }))
       )
-      const durable = DurableAgent.workflow("Planned", Planned, { store })
-
+      const durable = DurableAgent.workflow("PlannedStream", Planned, { store, stream: true })
       const outcome = yield* Effect.exit(
         Effect.gen(function* () {
-          const executionId = yield* DurableAgent.submit(durable, store, "planned-1", "hello")
+          const executionId = yield* DurableAgent.submit(durable, store, "planned-stream-1", "hello")
           return yield* DurableAgent.result(durable, executionId)
-        }).pipe(
-          Effect.provide(
-            durable.layer.pipe(
-              Layer.provideMerge(Engine),
-              Layer.provideMerge(modelLayer)
-            )
-          )
-        )
+        }).pipe(Effect.provide(durable.layer.pipe(Layer.provideMerge(Engine), Layer.provideMerge(modelLayer))))
       )
-
       // However the workflow surfaces it, the run does not quietly succeed
       // with the journal bypassed.
-      const reported = Exit.isFailure(outcome)
-        ? String(outcome.cause)
-        : String(outcome.value)
+      const reported = Exit.isFailure(outcome) ? String(outcome.cause) : String(outcome.value)
       assert.include(reported, "ExecutionPlan")
     })
   )
 
   /**
-   * The same refusal under `DurableAgentClient`, which runs the other workflow
-   * body. That body had no refusal until the two shared one assembly: an
-   * agent with a plan ran there with its provider calls outside the journal.
-   * The refusal is an ordinary failure of the submission, so the session is
-   * freed rather than left claimed behind it.
+   * The same refusal under `DurableAgentClient`, which runs the other
+   * workflow body. That body had no refusal at all until the two shared one
+   * assembly: an agent with a plan ran there with its provider calls outside
+   * the journal. The refusal is an ordinary failure of the submission, so
+   * the session is freed rather than left claimed behind it.
    */
-  it.live("the durable client refuses an execution plan too, and frees the session", () =>
+  it.live("the durable client refuses streaming under an execution plan, and frees the session", () =>
     Effect.gen(function* () {
       const store = yield* DurableChannels.memoryStore
       const sessionStore = yield* DurableSessionStore.memoryStore
@@ -1461,11 +1461,14 @@ describe("compaction under durability", () => {
       yield* Effect.gen(function* () {
         const client = yield* AgentClient.AgentClient
         const session = yield* client.createSession()
-        const outcome = yield* Effect.exit(session.prompt("hello"))
+        const outcome = yield* Effect.exit(session.prompt("hello", { stream: true }))
         assert.isTrue(Exit.isFailure(outcome))
         if (Exit.isFailure(outcome)) assert.include(Cause.pretty(outcome.cause), "ExecutionPlan")
         const record = yield* sessionStore.get(session.id)
         assert.isTrue(Option.isSome(record) && Option.isNone(record.value.claim), "the refused submission left the session claimed")
+        // Batch is not refused: the plan's answer, journalled.
+        const batch = yield* session.prompt("again")
+        assert.strictEqual(batch.text, "from the plan")
       }).pipe(Effect.provide(runtime))
     }).pipe(Effect.scoped)
   )

@@ -6,6 +6,7 @@ import type { Tool } from "effect/unstable/ai"
 import { Activity, WorkflowEngine } from "effect/unstable/workflow"
 import type * as AgentOutput from "../AgentOutput.js"
 import type * as ToolExposure from "../ToolExposure.js"
+import type * as Journal from "../Journal.js"
 import { describedTools } from "../internal/describedTools.js"
 
 /**
@@ -110,34 +111,51 @@ const streamPartsFor = <Tools extends Record<string, Tool.Any>>(
   return out
 }
 
-export const wrap = <Tools extends Record<string, Tool.Any>>(
+/** What `wrap` takes. */
+export interface WrapOptions {
+  readonly prefix?: string | undefined
+  /**
+   * The agent's declared output, when it has one.
+   *
+   * Its tool is injected per turn by `AgentTurn` and never enters the
+   * agent's tool record, so the journal's part schema has to be told about
+   * it separately -- see `internal/describedTools.ts` for why that set has a
+   * name. Without it, encoding a response that calls the output tool fails
+   * and the submission dies with a `SchemaError` naming a union the reader
+   * has no way to connect to a missing output tool.
+   *
+   * Only the schemas are affected. Handlers are untouched, which is right:
+   * the injected tool's handler closes over one session's staged value and
+   * is not an activity to replay.
+   */
+  readonly output?: Option.Option<AgentOutput.AgentOutput<any, any>> | undefined
+  /**
+   * The agent's tool exposure. A progressive one injects `discover_tools`
+   * per turn, which the journal's part schema must know about for the same
+   * reason as the output tool.
+   */
+  readonly toolExposure?: ToolExposure.ToolExposure | undefined
+}
+
+/**
+ * `wrap`, and the commit point `Journal.modelCall` for a model call the
+ * kernel makes under an `ExecutionPlan` (item 129, slice 2).
+ *
+ * A plan's steps provide their own `LanguageModel`, which shadows the
+ * substituted one, so the plan's calls never reach the layer. The kernel
+ * hands the whole ladder to `commit` instead, and it is journalled as one
+ * activity, `model-plan-N`, under the same codec and the same rule for
+ * failures as every other model call. Its own counter keeps its names apart
+ * from `model-N`.
+ */
+export const wrapWithCommit = <Tools extends Record<string, Tool.Any>>(
   toolkit: Toolkit.WithHandler<Tools>,
-  options?: {
-    readonly prefix?: string | undefined
-    /**
-     * The agent's declared output, when it has one.
-     *
-     * Its tool is injected per turn by `AgentTurn` and never enters the
-     * agent's tool record, so the journal's part schema has to be told about
-     * it separately -- see `internal/describedTools.ts` for why that set has a
-     * name. Without it, encoding a response that calls the output tool fails
-     * and the submission dies with a `SchemaError` naming a union the reader
-     * has no way to connect to a missing output tool.
-     *
-     * Only the schemas are affected. Handlers are untouched, which is right:
-     * the injected tool's handler closes over one session's staged value and
-     * is not an activity to replay.
-     */
-    readonly output?: Option.Option<AgentOutput.AgentOutput<any, any>> | undefined
-    /**
-     * The agent's tool exposure. A progressive one injects `discover_tools`
-     * per turn, which the journal's part schema must know about for the same
-     * reason as the output tool.
-     */
-    readonly toolExposure?: ToolExposure.ToolExposure | undefined
-  }
+  options?: WrapOptions
 ): Effect.Effect<
-  Layer.Layer<LanguageModel.LanguageModel>,
+  {
+    readonly layer: Layer.Layer<LanguageModel.LanguageModel>
+    readonly commit: Journal.Service["modelCall"]
+  },
   never,
   LanguageModel.LanguageModel | WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
 > =>
@@ -200,22 +218,22 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
      * going through `service.generateText` would mean re-entering Effect AI's
      * overloads, which erase the tool types the harness depends on.
      */
-    const durableGenerate = (
-      options: any,
-      /** On a first run, every provider stream part as it arrives. Absent on the batch path. */
+    /**
+     * One model call's outcome, journalled as the activity `name`. `execute`
+     * is the call; `tap`, on the live streaming path, is told each part.
+     */
+    const record = <R>(
+      name: string,
+      execute: Effect.Effect<LanguageModel.GenerateTextResponse<Tools>, unknown, R>,
       tap?: (part: Response.StreamPart<Tools, "encoded">) => void
     ) =>
         Effect.gen(function* () {
-          const index = yield* Ref.getAndUpdate(callIndex, (n) => n + 1)
           // Like tool activities, this must not fail: an activity with no
           // declared error schema cannot encode a failure, and the engine
           // records an unencodable `SchemaError` instead of the provider error.
           // The outcome is carried as a value and re-raised here.
           const outcome = yield* Activity.make({
-            // The prefix scopes the name to one submission when the caller
-            // runs several executions against the same workflow definition —
-            // without it, a second execution's `model-0` meets the first's.
-            name: `${prefix}model-${index}`,
+            name,
             success: outcomeSchema,
             // `Activity.make` retries an `execute` interrupted from inside up
             // to ten times on its own, then reports the interrupt as a
@@ -232,44 +250,7 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
             // outside -- a runner shutting down -- is not caught by the
             // retry at all and still suspends the workflow as before.
             ...(tap === undefined ? {} : { interruptRetryPolicy: Schedule.recurs(0) }),
-            execute: (
-              tap === undefined
-                ? (underlying.generateText(options) as unknown as Effect.Effect<
-                    LanguageModel.GenerateTextResponse<Tools>,
-                    unknown
-                  >)
-                : // The live path: the provider's stream, folded into the
-                  // completed response the journal keeps, with each part
-                  // handed to the harness as it arrives. This runs exactly
-                  // once -- a replay never enters `execute` -- so deltas
-                  // are delivered live on the first run and never twice.
-                  Stream.runFoldEffect(
-                    underlying.streamText(options) as Stream.Stream<
-                      Response.StreamPart<Tools, "encoded">,
-                      unknown
-                    >,
-                    () => Accumulator.empty<Tools>(),
-                    (state, part) => {
-                      const next = Accumulator.step(state, part)
-                      if (next._tag === "Failed") {
-                        return Effect.fail(
-                          new AiError.InternalProviderError({
-                            description: Accumulator.describeStreamError(next.error)
-                          })
-                        )
-                      }
-                      tap(part)
-                      return Effect.succeed(next.state)
-                    }
-                  ).pipe(
-                    Effect.map(
-                      (state) =>
-                        new LanguageModel.GenerateTextResponse<Tools>([
-                          ...Accumulator.finish(state)
-                        ] as Array<Response.Part<Tools, any>>)
-                    )
-                  )
-            ).pipe(
+            execute: execute.pipe(
               Effect.map(
                 (response): ModelOutcome => ({
                   _tag: "Succeeded",
@@ -292,6 +273,70 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
 
           return yield* reraise(outcome as ModelOutcome)
         })
+
+    /**
+     * One journalled model call. Named so `streamText` can reuse it directly:
+     * going through `service.generateText` would mean re-entering Effect AI's
+     * overloads, which erase the tool types the harness depends on.
+     */
+    const durableGenerate = (
+      options: any,
+      /** On a first run, every provider stream part as it arrives. Absent on the batch path. */
+      tap?: (part: Response.StreamPart<Tools, "encoded">) => void
+    ) =>
+      Effect.flatMap(Ref.getAndUpdate(callIndex, (n) => n + 1), (index) =>
+        record(
+          // The prefix scopes the name to one submission when the caller
+          // runs several executions against the same workflow definition —
+          // without it, a second execution's `model-0` meets the first's.
+          `${prefix}model-${index}`,
+          tap === undefined
+            ? (underlying.generateText(options) as unknown as Effect.Effect<
+              LanguageModel.GenerateTextResponse<Tools>,
+              unknown
+            >)
+            : // The live path: the provider's stream, folded into the
+              // completed response the journal keeps, with each part
+              // handed to the harness as it arrives. This runs exactly
+              // once -- a replay never enters `execute` -- so deltas
+              // are delivered live on the first run and never twice.
+              Stream.runFoldEffect(
+                underlying.streamText(options) as Stream.Stream<
+                  Response.StreamPart<Tools, "encoded">,
+                  unknown
+                >,
+                () => Accumulator.empty<Tools>(),
+                (state, part) => {
+                  const next = Accumulator.step(state, part)
+                  if (next._tag === "Failed") {
+                    return Effect.fail(
+                      new AiError.InternalProviderError({
+                        description: Accumulator.describeStreamError(next.error)
+                      })
+                    )
+                  }
+                  tap(part)
+                  return Effect.succeed(next.state)
+                }
+              ).pipe(
+                Effect.map(
+                  (state) =>
+                    new LanguageModel.GenerateTextResponse<Tools>([
+                      ...Accumulator.finish(state)
+                    ] as Array<Response.Part<Tools, any>>)
+                )
+              ),
+          tap
+        ))
+
+    // The plan's ladder, as one journalled call: see `wrapWithCommit`. The
+    // cast widens as `generateText`'s below does, and for the same reason:
+    // a recorded failure comes back as a `DurableModelFailure`, not as the
+    // provider's own error, and the body projects it either way.
+    const planIndex = yield* Ref.make(0)
+    const commit = ((call: Effect.Effect<LanguageModel.GenerateTextResponse<Tools>, unknown, unknown>) =>
+      Effect.flatMap(Ref.getAndUpdate(planIndex, (n) => n + 1), (index) =>
+        record(`${prefix}model-plan-${index}`, call))) as unknown as Journal.Service["modelCall"]
 
     const service: LanguageModel.LanguageModel = {
       ...underlying,
@@ -345,5 +390,15 @@ export const wrap = <Tools extends Record<string, Tool.Any>>(
         )) as unknown as LanguageModel.LanguageModel["streamText"]
     }
 
-    return Layer.succeed(LanguageModel.LanguageModel, service)
+    return { layer: Layer.succeed(LanguageModel.LanguageModel, service), commit }
   })
+
+/** Wrap an existing `LanguageModel` so its responses are persisted. See `wrapWithCommit`. */
+export const wrap = <Tools extends Record<string, Tool.Any>>(
+  toolkit: Toolkit.WithHandler<Tools>,
+  options?: WrapOptions
+): Effect.Effect<
+  Layer.Layer<LanguageModel.LanguageModel>,
+  never,
+  LanguageModel.LanguageModel | WorkflowEngine.WorkflowEngine | WorkflowEngine.WorkflowInstance
+> => Effect.map(wrapWithCommit(toolkit, options), (wrapped) => wrapped.layer)

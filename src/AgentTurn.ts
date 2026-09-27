@@ -8,6 +8,7 @@ import * as ToolExposure from "./ToolExposure.js"
 import * as AgentEvent from "./AgentEvent.js"
 import type * as AgentOutput from "./AgentOutput.js"
 import type { Correlation } from "./AgentEvent.js"
+import * as Journal from "./Journal.js"
 import * as ToolExecution from "./ToolExecution.js"
 import * as EventBus from "./internal/eventBus.js"
 import * as History from "./internal/history.js"
@@ -349,6 +350,21 @@ const withPlan = <A, E, R>(
   })
 
 /**
+ * A batch model call under a plan, handed to the journal's commit point
+ * (`Journal.modelCall`) with its whole ladder. The plan's steps provide their
+ * own `LanguageModel`, so a durable substitution of the model never sees
+ * their calls. The journal is what records the ladder's outcome, and the
+ * identity when nothing is durable. Without a plan the call is untouched.
+ */
+const commitUnderPlan = <A extends LanguageModel.GenerateTextResponse<any, any>, E, R>(
+  session: Session<any, any, any>,
+  call: Effect.Effect<A, E, R>
+): Effect.Effect<A, E, R> =>
+  Option.isNone(session.agent.executionPlan)
+    ? call
+    : Effect.flatMap(Journal.Journal, (journal) => journal.modelCall(call))
+
+/**
  * The same, for the streamed model call.
  *
  * Streaming is the hard case: `MessageDelta` is emitted *as the stream runs*,
@@ -569,16 +585,19 @@ export const execute = Effect.fn("AgentTurn.execute")(function* <
 
     const modelResponse = options.stream === true
       ? streamResponse(session, correlation, context, handler, exposed)
-      : withPlan(
+      : commitUnderPlan(
           session,
-          LanguageModel.generateText({
-            prompt: context,
-            toolkit: handler,
-            // The harness owns tool execution so that it can emit the lifecycle
-            // events, choose the concurrency, and commit results itself.
-            disableToolCallResolution: true,
-            ...choiceFor(exposed)
-          })
+          withPlan(
+            session,
+            LanguageModel.generateText({
+              prompt: context,
+              toolkit: handler,
+              // The harness owns tool execution so that it can emit the lifecycle
+              // events, choose the concurrency, and commit results itself.
+              disableToolCallResolution: true,
+              ...choiceFor(exposed)
+            })
+          )
         )
 
     // Usage is spent once the model answers, even if a later tool fails or

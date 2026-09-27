@@ -6698,3 +6698,15 @@ scheduling, along with the admission checks. The copies had drifted: only
 agent with a plan made its provider calls outside the journal, so a replay
 repeated them. The refusal is now in the shared admission, inside the
 body's scope, so the client frees the session afterwards.
+
+## 2026-09-27 - a durable agent carries an ExecutionPlan on batch submissions
+
+Item 129, slice 2, the batch half, done batch-first as recommended.
+`Journal` gains one commit point, `modelCall`. The kernel uses it only for a
+batch model call under an `ExecutionPlan`: the plan's steps provide their
+own model, which shadows `DurableModel`. `/durable` backs the commit point
+with `DurableModel`'s codec, so the whole ladder is one journalled activity.
+In a crash test, the plan's provider was asked twice, where it was asked
+three times without the commit. A streamed submission under a plan is still
+refused, pending the owner's choice of a streaming commit point. The commit
+adds one inventoried erasing cast in `DurableModel`, for 25 in total.

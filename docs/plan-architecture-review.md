@@ -10,8 +10,10 @@ Status: **proposal**, except items built 2026-09-26:
 - item 134 (§7.3), as `DurableEquivalence.sweep` with stores of your own;
 - item 135 (§7.3), as `/durable`'s `Recovery`: `classify`, `explain` and
   `inspect`;
-- item 129 (§2), slices 1 and 3: `Journal.step`, with `/durable`'s
-  `DurableJournal`, and one body assembly for both durable workflows.
+- item 129 (§2), slices 1 and 3 and the batch half of 2: `Journal.step`,
+  with `/durable`'s `DurableJournal`; one body assembly for both durable
+  workflows; and `Journal.modelCall`, so a durable agent carries an
+  `ExecutionPlan` on batch submissions.
   The owner approved it and `PLAN.md` §30.1 is amended. The later slices
   are in the ledger;
 - item 130 (§4), as an in-process session's bounded event record. The

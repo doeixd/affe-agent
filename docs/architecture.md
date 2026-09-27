@@ -538,6 +538,7 @@ permission       policy                          DurablePermission.wrap       �
 InputChannel     Queue                           DurableChannels.factory      → each drain journaled
 Elicitation      Deferred                        DurableElicitation           → DurableDeferred
 Journal.step     runs the effect                 DurableJournal.make          → one Activity per step
+Journal.modelCall  runs the plan's ladder        DurableModel.wrapWithCommit  → one Activity per batch call under a plan
 event sink       none                            delivery recorder            → DeliveryLog
 tool strategy    agent's                         captured once at admission, then replayed
 ```
@@ -584,8 +585,10 @@ Replaying a journal against changed code fails loudly:
   itself `CompatibleWith` an older one.
 - **A changed permission policy** raises `PermissionPolicyChangedError`.
 - **A changed host scheduling** raises `ToolSchedulingChangedError`.
-- **An `ExecutionPlan`** makes a durable agent refuse to start, because a
-  plan step provides its own model and would bypass the journal.
+- **An `ExecutionPlan` on a streamed submission** is refused, because a plan
+  step provides its own model and would bypass the journal. A batch call
+  under a plan is journalled whole instead, through `Journal.modelCall`
+  (item 129, slice 2).
 
 ### 9.4 Side effects
 
@@ -663,7 +666,7 @@ verify: exists src/durable/DurableModel.ts
 verify: exists src/durable/DurableToolkit.ts
 verify: exists src/testing/DurableEquivalence.ts
 verify: grep "export const sweep = " src/testing/DurableEquivalence.ts
-verify: grep "A durable agent cannot carry an ExecutionPlan" src/durable/DurableAgent.ts
+verify: grep "A durable agent cannot stream under an ExecutionPlan" src/durable/DurableAgent.ts
 ```
 
 ## 10. Crossing a process boundary

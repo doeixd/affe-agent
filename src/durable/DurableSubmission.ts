@@ -634,7 +634,7 @@ export const workflow = <Tools extends Record<string, Tool.Any>, Value, Input>(
       // definition run against the same engine, and their journals must not
       // share an activity namespace.
       const scopePrefix = `${payload.submissionId}:`
-      const assembled = yield* DurableAgent.assemble(agent, { prefix: scopePrefix })
+      const assembled = yield* DurableAgent.assemble(agent, { prefix: scopePrefix, stream: payload.stream })
       const channels = yield* DurableChannels.factory(options.store, {
         prefix: scopePrefix
       })

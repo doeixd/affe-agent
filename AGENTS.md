@@ -24,7 +24,7 @@ A plain `x as T` is still checked for overlap — it can narrow, it cannot claim
 string is a number. `src/` has around a hundred of those and they are ordinary.
 What erases is `x as any`, which turns the checker off, and `x as unknown as T`,
 which routes around it. A third form erases too, from the other end: `x as never`, since `never` is
-assignable to everything. **Twenty-four erasing casts exist, in nine files**, and they
+assignable to everything. **Twenty-five erasing casts exist, in nine files**, and they
 are the list below. `test/Casts.test.ts` enforces it: adding one fails the build
 until it is written down here, with its reason.
 
@@ -62,7 +62,7 @@ The erasing casts in `src/` are structural, and each is documented at the site:
   `ToolSource.bind` (1) raise a declared tool's approval floor from the
   source's hints. `Array.map` widens the tuple `Tools` to `Tool.Any[]`, and
   nothing but an erasure restores the tuple the elements never left;
-* **wrapping a service whose method types are closed** — `DurableModel` (4),
+* **wrapping a service whose method types are closed** — `DurableModel` (5),
   `DurableToolkit` (3) and `TestLanguageModel` (6). Each replaces a method on a
   `LanguageModel.LanguageModel` or a `Toolkit.WithHandler` with one that journals,
   counts or replays around it. The value is the original's behaviour plus a
@@ -94,7 +94,12 @@ The erasing casts in `src/` are structural, and each is documented at the site:
 * **widening an error channel to cross an `Activity` boundary**
   (`DurableModel.ts:129`), where a workflow activity's `execute` must be typed
   against the schema the journal declares, and the underlying effect's error is
-  the caller's own `E`.
+  the caller's own `E`;
+* **committing a plan's ladder** (`DurableModel.wrapWithCommit`'s `commit`,
+  the fifth in that file). `Journal.modelCall` promises the caller's own `E`,
+  because locally it is the identity. The durable commit raises a recorded
+  failure as `DurableModelFailure` on replay, the same widening the
+  substituted `generateText` already makes, and the body projects both alike.
 
 Adding another needs a reason of that kind, and `test/Casts.test.ts` will ask
 for it.

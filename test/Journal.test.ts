@@ -1,8 +1,8 @@
 import { assert, describe, it } from "@effect/vitest"
 import { expectTypeOf } from "vitest"
 import { SqliteClient } from "@effect/sql-sqlite-node"
-import { Cause, Context, Effect, Exit, Layer, Option, Ref, Schema } from "effect"
-import { Prompt, Tool } from "effect/unstable/ai"
+import { Cause, Context, Effect, ExecutionPlan, Exit, Layer, Option, Ref, Schema } from "effect"
+import { LanguageModel, Prompt, Tool } from "effect/unstable/ai"
 import { ClusterWorkflowEngine, TestRunner } from "effect/unstable/cluster"
 import { Workflow } from "effect/unstable/workflow"
 import * as NodeFs from "node:fs"
@@ -17,7 +17,7 @@ import * as DurableChannels from "../src/durable/DurableChannels.js"
 import * as DurableJournal from "../src/durable/DurableJournal.js"
 import type * as DurableToolkit from "../src/durable/DurableToolkit.js"
 import { turnFailpoints } from "../src/internal/turnFailpoints.js"
-import { DurableEquivalence } from "../src/testing/index.js"
+import { DurableEquivalence, TestLanguageModel } from "../src/testing/index.js"
 import * as FakeModel from "./FakeModel.js"
 
 /**
@@ -33,6 +33,11 @@ describe("Journal.step's types", () => {
     expectTypeOf(read).toEqualTypeOf<Effect.Effect<number, never, Clock2>>()
     const dated = Journal.step("when", Schema.Date, Effect.succeed(new Date(0)))
     expectTypeOf(dated).toEqualTypeOf<Effect.Effect<Date, never, never>>()
+  })
+
+  it("modelCall hands back the call's own type: value, error and requirement", () => {
+    const call = LanguageModel.generateText({ prompt: "x" })
+    expectTypeOf(Journal.direct.modelCall(call)).toEqualTypeOf<typeof call>()
   })
 
   it("a step that could fail is refused: model the failure as a value", () => {
@@ -177,4 +182,44 @@ describe("DurableAgent's body provides the journal too", () => {
       }).pipe(Effect.provide(durable.layer.pipe(Layer.provideMerge(Engine), Layer.provideMerge(model))))
       assert.deepStrictEqual(yield* Ref.get(seen), [true])
     }), 30_000)
+})
+
+describe("a batch model call under an ExecutionPlan, under a crash (item 129, slice 2)", () => {
+  /**
+   * The plan's step provides its own model, which shadows the durable model
+   * wrapper, so without the commit point every replay would ask the provider
+   * again. The ladder is committed whole instead: a replacement replays the
+   * first turn's response from the journal, and the provider behind the plan
+   * is asked exactly as often as in a run that never crashed.
+   */
+  it.live("a replayed turn does not ask the plan's provider again", () =>
+    Effect.gen(function*() {
+      const calls = yield* Ref.make(0)
+      const { layer: planModel } = yield* TestLanguageModel.script(
+        [
+          { toolCalls: [{ id: "l1", name: "lookup", params: { of: "orders" } }] },
+          { text: "done" }
+        ],
+        { select: "history" }
+      )
+      const planned = DurableEquivalence.scenario({
+        agent: (effects) =>
+          Agent.make({
+            tools: [Agent.tool(Lookup, ({ of }) => Effect.as(effects.record(of), `${of}: ok`))],
+            loop: AgentLoop.bounded(4)
+          }).pipe(Agent.withExecutionPlan(ExecutionPlan.make({ provide: TestLanguageModel.counting(planModel, calls) }))),
+        // The ambient model is shadowed by the plan and never answers.
+        turns: [],
+        prompt: "look it up"
+      })
+      const straight = yield* DurableEquivalence.straight(planned, { database })
+      assert.strictEqual(straight.text, "done")
+      assert.strictEqual(yield* Ref.getAndSet(calls, 0), 2)
+      const recovered = yield* DurableEquivalence.crashed(planned, {
+        database,
+        at: turnFailpoints.qualified("after-commit")
+      })
+      assert.strictEqual(yield* Ref.get(calls), 2, "the plan's provider was asked again on replay")
+      assert.deepStrictEqual(recovered.observation, straight)
+    }), 90_000)
 })

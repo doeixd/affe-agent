@@ -3151,7 +3151,7 @@ verify: grep "only the recipient may reply" test/Messaging.test.ts
      `1868ec3`).
 
      ```text
-     verify: grep "Twenty-four erasing casts exist, in nine files" AGENTS.md
+     verify: grep "erasing casts exist, in nine files" AGENTS.md
      verify: grep "with its reason (nine files)" STATUS.md
      verify: grep "captures everything the fibre has, a \`Scope\`" AGENTS.md
      verify: grep "except \`/sandbox/local\`, \`/blob/fs\` and \`/cloudflare\`" README.md

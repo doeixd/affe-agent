@@ -144,10 +144,13 @@ const ALLOWED: ReadonlyArray<readonly [string, number, string]> = [
   [
     "src/durable/DurableModel.ts",
     // 4 since item 103: the replayed stream is built from decoded parts, so
-    // the cast that passed encoded ones off as decoded is gone.
-    4,
-    "wrapping a `LanguageModel.LanguageModel` whose method types are closed, and " +
-      "widening an error channel to cross an `Activity` boundary"
+    // the cast that passed encoded ones off as decoded is gone. 5 since item
+    // 129 slice 2: the plan commit point's widened error.
+    5,
+    "wrapping a `LanguageModel.LanguageModel` whose method types are closed, " +
+      "widening an error channel to cross an `Activity` boundary, and " +
+      "committing a plan's ladder, whose recorded failure is raised as " +
+      "`DurableModelFailure` where `Journal.modelCall` promises the caller's `E`"
   ],
   [
     "src/durable/DurableToolkit.ts",
