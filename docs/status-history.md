@@ -6738,3 +6738,13 @@ Item 129 is closed on three slices. The tool slice and the Cloudflare
 journal were decided against, and the ledger gives the reasons: they would
 rename journalled activities and drop durability for the kernel's other
 model callers, for one turn in flight on Cloudflare.
+
+## 2026-09-27 - review of the durable supervisor
+
+The review found two gaps in item 138's ledger, and both are fixed. First,
+a ledger was never cleared, so a later run under the same name skipped every
+child the last one finished. A life that ends, by finishing or escalating,
+now clears it. Second, interrupting the supervisor stopped its remote runs
+but left them recorded, so the next life waited on a stopped run. The
+attempt is now abandoned. The ledger's docs also state that one live
+supervisor per name may use it.

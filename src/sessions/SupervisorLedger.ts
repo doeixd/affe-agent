@@ -27,7 +27,10 @@ import * as KeyValueStore from "effect/unstable/persistence/KeyValueStore"
  * fresh allowance.
  *
  * `Supervisor.run` reads it through `Spec.ledger`, and `Supervisor.remoteTask`
- * is the child that uses the open attempt.
+ * is the child that uses the open attempt. A supervisor that ends, by
+ * finishing or escalating, clears what it wrote: the ledger outlives only a
+ * supervisor that died. Records are read and written whole, not atomically
+ * across processes, so one supervisor per name may use a ledger at a time.
  */
 
 export const ChildRecord = Schema.Struct({

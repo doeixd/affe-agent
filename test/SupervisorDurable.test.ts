@@ -69,11 +69,8 @@ describe("Supervisor.remoteTask with a ledger (item 138)", () => {
         })
         assert.deepStrictEqual(report.children, [{ id: "a", starts: 1 }])
         assert.strictEqual(yield* Ref.get(calls), 1, "the child's prompt was submitted a second time")
-        assert.deepStrictEqual(yield* ledger.child("durable", "a"), {
-          attempts: 1,
-          current: Option.none(),
-          finished: true
-        })
+        // The life finished, so it leaves nothing to resume.
+        assert.deepStrictEqual(yield* ledger.child("durable", "a"), SupervisorLedger.empty)
       }).pipe(Effect.scoped, Effect.provide(layer))
     }))
 
@@ -103,7 +100,8 @@ describe("Supervisor.remoteTask with a ledger (item 138)", () => {
         assert.deepStrictEqual(writes.map((r) => [r.attempts, Option.isSome(r.current), submitted(r), r.finished]), [
           [1, true, false, false], // the attempt is opened, before anything is submitted
           [1, true, true, false], // its submission is recorded before the wait
-          [1, false, false, true] // and it finished
+          [1, false, false, true], // it finished
+          [0, false, false, false] // and the life that ended forgets it
         ])
       }).pipe(Effect.scoped, Effect.provide(layer))
     }))
@@ -144,19 +142,42 @@ describe("Supervisor.remoteTask with a ledger (item 138)", () => {
       }
     }))
 
-  it.effect("a restart is recorded, so the next life counts it", () =>
+  it.effect("a restart is recorded as it happens, so a life that dies after it leaves it counted", () =>
     Effect.gen(function*() {
       const ledger = yield* SupervisorLedger.memory
+      const written = yield* Ref.make<ReadonlyArray<ReadonlyArray<number>>>([])
       const attempts = yield* Ref.make(0)
       yield* Supervisor.run({
         name: "recorded",
-        ledger,
+        ledger: {
+          ...ledger,
+          setRestarts: (supervisor, at) => Effect.andThen(Ref.update(written, (all) => [...all, at]), ledger.setRestarts(supervisor, at))
+        },
         classify: () => "restart",
         children: [
           Supervisor.child("a", Effect.flatMap(Ref.updateAndGet(attempts, (n) => n + 1), (n) => n === 1 ? Effect.fail("once") : Effect.void))
         ]
       })
-      assert.strictEqual((yield* ledger.restarts("recorded")).length, 1)
+      // One restart written when it happened, then cleared when the life ended.
+      assert.deepStrictEqual((yield* Ref.get(written)).map((at) => at.length), [1, 0])
+    }))
+
+  it.effect("a life that ends forgets its ledger, so the next run under the name starts afresh", () =>
+    Effect.gen(function*() {
+      const ledger = yield* SupervisorLedger.memory
+      const ran = yield* Ref.make(0)
+      const spec = { name: "nightly", ledger, children: [Supervisor.child("a", Ref.update(ran, (n) => n + 1))] }
+      yield* Supervisor.run(spec)
+      yield* Supervisor.run(spec)
+      assert.strictEqual(yield* Ref.get(ran), 2, "the second night skipped a child the first night finished")
+    }))
+
+  it.effect("an escalation forgets the ledger too", () =>
+    Effect.gen(function*() {
+      const ledger = yield* SupervisorLedger.memory
+      yield* Effect.exit(Supervisor.run({ name: "gave-up", ledger, children: [Supervisor.child("a", Effect.fail("boom"))] }))
+      assert.deepStrictEqual(yield* ledger.child("gave-up", "a"), SupervisorLedger.empty)
+      assert.deepStrictEqual(yield* ledger.restarts("gave-up"), [])
     }))
 })
 
@@ -245,7 +266,43 @@ describe("a durable child rejoined by its attempt's key (item 138)", () => {
         const report = yield* Fiber.join(supervising)
         assert.deepStrictEqual(report.children, [{ id: "a", starts: 1 }])
         assert.strictEqual(yield* Ref.get(calls), 1)
-        assert.deepStrictEqual(yield* ledger.child("dur", "a"), { attempts: 1, current: Option.none(), finished: true })
+        assert.deepStrictEqual(yield* ledger.child("dur", "a"), SupervisorLedger.empty)
       }).pipe(Effect.provide(runtime))
     }).pipe(Effect.scoped), 30_000)
+})
+
+describe("a supervisor that is stopped, not killed", () => {
+  /**
+   * Interrupting the supervisor stops its remote children's runs. The attempt
+   * each was waiting on is abandoned, so a later life opens a new one rather
+   * than waiting on a run that was stopped and failing on it.
+   */
+  it.live("interrupting the supervisor abandons the remote attempt it stopped", () =>
+    Effect.gen(function*() {
+      const release = yield* Deferred.make<void>()
+      const entered = yield* Deferred.make<void>()
+      const calls = yield* Ref.make(0)
+      const { layer: model } = yield* TestLanguageModel.script([
+        { text: "never", started: entered, during: Deferred.await(release) }
+      ])
+      const layer = AgentClient.layer(Agent.make({ loop: AgentLoop.bounded(1) })).pipe(
+        Layer.provide(TestLanguageModel.counting(model, calls))
+      )
+      yield* Effect.gen(function*() {
+        const client = yield* AgentClient.AgentClient
+        const session = yield* client.createSession()
+        const ledger = yield* SupervisorLedger.memory
+        const supervising = yield* Effect.forkChild(Supervisor.run({
+          name: "stopped",
+          ledger,
+          children: [Supervisor.remoteTask("a", { session: client.session(session.id), prompt: "go" })]
+        }))
+        yield* Deferred.await(entered)
+        yield* Fiber.interrupt(supervising)
+        const record = yield* ledger.child("stopped", "a")
+        assert.isTrue(Option.isNone(record.current), "the stopped attempt was left open, to be waited on again")
+        assert.strictEqual(record.attempts, 1)
+        assert.isFalse(record.finished)
+      }).pipe(Effect.scoped, Effect.provide(layer))
+    }), 30_000)
 })

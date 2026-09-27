@@ -240,8 +240,14 @@ Each attempt is opened in the ledger before it submits, under the key
 the submission is followed by one that submits under the same key, and a
 durable client still holding that claim rejoins it.
 
+The ledger is for a supervisor that *died*. A life that ends, by finishing or
+escalating, clears it, so tomorrow's run under the same name starts every
+child afresh. Interrupting a supervisor stops its remote children's runs and
+abandons those attempts, so they are not waited on again.
+
 **Limits.** Something must start the supervisor again: the ledger remembers,
-it does not restart. Children started from templates are not recorded.
+it does not restart. One supervisor per name may use a ledger at a time.
+Children started from templates are not recorded.
 `rewind` is specified in `plan-supervision.md` §4, not built.
 
 ### An agent as supervisor

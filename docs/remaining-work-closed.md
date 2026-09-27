@@ -3498,8 +3498,19 @@ verify: grep "only the recipient may reply" test/Messaging.test.ts
      - the `keyValue` ledger;
      - the rejoin against a real `DurableAgentClient`.
 
-     Four rules were broken once, and a test failed each time: resuming,
-     skipping, loading the history, and reusing the open attempt. The
+     - **Fixed in review, 2026-09-27.** Two gaps in the first version:
+       - a ledger was never cleared, so a later deliberate run under the same
+         name (tomorrow's job) would skip every child forever;
+       - interrupting the supervisor stopped the remote runs but left their
+         submissions recorded, so the next life waited on a stopped run and
+         escalated.
+
+       A life that ends, by finishing or escalating, now clears its ledger,
+       and an interrupted remote attempt is abandoned (`Attempt.abandon`).
+
+     Seven rules were broken once, and a test failed each time: resuming,
+     skipping, loading the history, reusing the open attempt, clearing on
+     completion, clearing on escalation, and abandoning on interrupt. The
      intensity test first passed with the history ignored, because a child
      that always fails reaches the limit anyway. It now counts runs.
 

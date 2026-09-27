@@ -58,7 +58,9 @@ import * as SupervisorLedger from "./SupervisorLedger.js"
  *
  * `run` ends when no child is left running: each has exited, and none is due a
  * restart. A permanent child therefore keeps it running until its scope closes.
- * In process only: restart history lives in memory (§5 is the durable form).
+ * Restart history lives in memory, unless `Spec.ledger` gives it somewhere to
+ * survive the supervisor's death (§5): see `SupervisorLedger` and
+ * `remoteTask`.
  */
 
 export type Restart = "permanent" | "transient" | "temporary"
@@ -127,6 +129,12 @@ export interface Attempt {
   readonly resume: Option.Option<string>
   /** Record the submission this attempt is waiting on, before waiting. */
   readonly begin: (submissionId: string) => Effect.Effect<void>
+  /**
+   * Close this attempt without an outcome, for a child that ended the work it
+   * asked for (interrupted it), so the next start opens a new attempt rather
+   * than waiting on a run that was stopped.
+   */
+  readonly abandon: Effect.Effect<void>
 }
 
 export const CurrentChild = Context.Reference<Option.Option<ChildContext>>(Namespace.tag("sessions/CurrentChild"), {
@@ -276,8 +284,9 @@ export const task = <
  *
  * A completed submission is a normal exit, and a failed or interrupted one
  * is abnormal. Stopping the child (a sibling's restart, the supervisor's own
- * shutdown) interrupts the remote run too: a supervisor that ends takes its
- * children with it, and only a supervisor that *dies* leaves them running.
+ * shutdown) interrupts the remote run too, and abandons the attempt: a
+ * supervisor that ends takes its children with it, and only a supervisor
+ * that *dies* leaves them running, and its ledger, behind.
  */
 export const remoteTask = <R>(
   id: string,
@@ -316,8 +325,14 @@ export const remoteTask = <R>(
         })
     })
     const result = yield* session.awaitSubmission(submissionId).pipe(
-      // The supervisor stopping this child stops the run it asked for.
-      Effect.onInterrupt(() => Effect.ignore(session.interrupt()))
+      // The supervisor stopping this child stops the run it asked for, and
+      // the attempt with it: a stopped run is not one to wait on again.
+      Effect.onInterrupt(() =>
+        Effect.andThen(
+          Effect.ignore(session.interrupt()),
+          Option.match(attempt, { onNone: () => Effect.void, onSome: (a) => a.abandon })
+        )
+      )
     )
     if (result.status === "interrupted") return yield* new TaskInterruptedError({ child: id })
     return result
@@ -567,8 +582,11 @@ export interface Spec<Children extends ReadonlyArray<Child<any, any>>> {
    * - hands each start its in-flight submission, which `remoteTask` waits on
    *   instead of submitting again.
    *
-   * Children the agent started from templates are not recorded: they belong
-   * to one supervisor's life. A ledger that cannot be read or written ends
+   * A life that ends, by finishing or escalating, clears the ledger, so the
+   * next run under the name starts afresh: the ledger is for a supervisor
+   * that died, not one that stopped. One live supervisor per name and
+   * ledger: two at once would each read and write the other's records. Children the agent started from
+   * templates are not recorded: they belong to one supervisor's life. A ledger that cannot be read or written ends
    * the supervisor with a defect, since carrying on would forget what the
    * ledger exists to remember.
    */
@@ -808,6 +826,20 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
       (): ReadonlyArray<number> => []
     )
     const fromSpec = new Set(spec.children.map((entry) => entry.id))
+    /**
+     * A life that ends, by finishing or by escalating, leaves nothing to
+     * resume, so its ledger is cleared: the next run under this name starts
+     * every child and counts no restarts. Only a supervisor that *dies*
+     * leaves a ledger behind.
+     */
+    const forget = Effect.asVoid(recorded((l) =>
+      Effect.andThen(
+        Effect.forEach(spec.children, (entry) => l.update(spec.name, entry.id, () => SupervisorLedger.empty), {
+          discard: true
+        }),
+        l.setRestarts(spec.name, [])
+      )
+    ))
     let grantLeft = grantRestarts
     let pending = Option.none<{
       readonly child: string
@@ -842,7 +874,10 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
                   Effect.orDie(l.update(spec.name, entry.id, (r) => ({
                     ...r,
                     current: Option.some({ attempt: open.attempt, submissionId: Option.some(submissionId) })
-                  }))).pipe(Effect.asVoid)
+                  }))).pipe(Effect.asVoid),
+                abandon: Effect.orDie(l.update(spec.name, entry.id, (r) => ({ ...r, current: Option.none() }))).pipe(
+                  Effect.asVoid
+                )
               } satisfies Attempt
             })
           )
@@ -888,9 +923,9 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
     )
 
     const escalate = (id: string, reason: SupervisorEscalatedError["reason"], detail: string) =>
-      Effect.andThen(
-        lock.withPermits(1)(stopAll),
-        Effect.fail(new SupervisorEscalatedError({ supervisor: spec.name, child: id, reason, detail }))
+      lock.withPermits(1)(stopAll).pipe(
+        Effect.andThen(forget),
+        Effect.andThen(Effect.fail(new SupervisorEscalatedError({ supervisor: spec.name, child: id, reason, detail })))
       )
 
     /** Whether one more restart fits: the window, then the budget. */
@@ -1182,6 +1217,7 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
       children: children().map((entry) => ({ id: entry.id, starts: stateOf(entry.id).starts })),
       decisions
     }
+    yield* forget
     return report
     // A plain `as`, and the only one here. The children are typed
     // `Child<any, any>` so that one list can hold differently typed effects,
