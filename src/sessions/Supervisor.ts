@@ -6,11 +6,13 @@ import * as Agent from "../Agent.js"
 import type { AgentDefinition } from "../Agent.js"
 import * as AgentSession from "../AgentSession.js"
 import * as Budget from "../budget/Budget.js"
+import type * as AgentClient from "../client/AgentClient.js"
 import * as RestartPlan from "../internal/restartPlan.js"
 import * as Namespace from "../internal/namespace.js"
 import { positiveInteger } from "../internal/positive.js"
 import * as Messaging from "./Messaging.js"
 import * as SessionInbox from "./SessionInbox.js"
+import * as SupervisorLedger from "./SupervisorLedger.js"
 
 /**
  * OTP-style supervision, in process
@@ -105,6 +107,26 @@ export interface ChildContext {
   readonly guidance: Option.Option<string>
   /** Tell the supervisor which session this start is running, for `inspect_child`. */
   readonly publish: (view: SessionView) => Effect.Effect<void>
+  /**
+   * This start's durable attempt, when the supervisor keeps a ledger
+   * (`Spec.ledger`); `None` otherwise. `remoteTask` is the child that uses
+   * it.
+   */
+  readonly attempt: Option.Option<Attempt>
+}
+
+/** One start of a child under a ledgered supervisor. */
+export interface Attempt {
+  /**
+   * The idempotency key for this attempt: `${supervisor}:${child}:${n}`. The
+   * same across a restart of the supervisor that finds the attempt still
+   * open, so a durable client that still holds the claim rejoins it.
+   */
+  readonly key: string
+  /** The submission a supervisor before this one recorded for this attempt, to wait on rather than submit again. */
+  readonly resume: Option.Option<string>
+  /** Record the submission this attempt is waiting on, before waiting. */
+  readonly begin: (submissionId: string) => Effect.Effect<void>
 }
 
 export const CurrentChild = Context.Reference<Option.Option<ChildContext>>(Namespace.tag("sessions/CurrentChild"), {
@@ -230,6 +252,77 @@ export const task = <
     )
   }
 }
+
+/**
+ * A child that runs one prompt on a session reached through an `AgentClient`:
+ * durable, over RPC or HTTP, or in process (§5, item 138).
+ *
+ * Where `task` owns its session, this one only asks. The session, and a
+ * durable one's run, can outlive the supervisor's process. Under a
+ * supervisor with a ledger (`Spec.ledger`), a start:
+ * - waits on the submission a previous life of the supervisor recorded for
+ *   this attempt, when there is one, rather than submitting again;
+ * - otherwise submits under the attempt's idempotency key, and records the
+ *   submission before waiting on it.
+ *
+ * A supervisor that dies while a child's durable run is under way is
+ * therefore replaced by one that waits for the same run, not a second one.
+ * The attempt is opened in the ledger before anything is submitted, so a
+ * supervisor that dies between submitting and recording the submission
+ * leaves an open attempt, and the next life submits under the same key: a
+ * durable client still holding that claim rejoins it. The window left is a
+ * run that *finished* in that gap, since a key lasts as long as its claim:
+ * it is submitted again.
+ *
+ * A completed submission is a normal exit, and a failed or interrupted one
+ * is abnormal. Stopping the child (a sibling's restart, the supervisor's own
+ * shutdown) interrupts the remote run too: a supervisor that ends takes its
+ * children with it, and only a supervisor that *dies* leaves them running.
+ */
+export const remoteTask = <R>(
+  id: string,
+  options: {
+    /** The session to ask, e.g. `client.session(sessionId)`. Resolved at each start. */
+    readonly session: Effect.Effect<AgentClient.RemoteSession, AgentClient.RemoteError, R>
+    readonly prompt: AgentClient.RemoteInput
+    readonly stream?: boolean | undefined
+    readonly restart?: Restart | undefined
+  }
+): Child<AgentClient.RemoteError | TaskInterruptedError, R> => ({
+  id,
+  restart: options.restart ?? "transient",
+  run: Effect.gen(function*() {
+    const context = yield* CurrentChild
+    const session = yield* options.session
+    if (Option.isSome(context)) {
+      yield* context.value.publish({
+        sessionId: session.id,
+        history: Effect.orElseSucceed(session.history, () => Prompt.empty),
+        steer: (text) =>
+          session.steer(`A note from your supervisor: ${text}`).pipe(Effect.mapError((error) => error.message))
+      })
+    }
+    const attempt = Option.flatMap(context, (current) => current.attempt)
+    const submissionId = yield* Option.match(Option.flatMap(attempt, (a) => a.resume), {
+      onSome: Effect.succeed,
+      onNone: () =>
+        Effect.gen(function*() {
+          const receipt = yield* session.submit(options.prompt, {
+            ...(options.stream === undefined ? {} : { stream: options.stream }),
+            ...Option.match(attempt, { onNone: () => ({}), onSome: (a) => ({ idempotencyKey: a.key }) })
+          })
+          if (Option.isSome(attempt)) yield* attempt.value.begin(receipt.submissionId)
+          return receipt.submissionId
+        })
+    })
+    const result = yield* session.awaitSubmission(submissionId).pipe(
+      // The supervisor stopping this child stops the run it asked for.
+      Effect.onInterrupt(() => Effect.ignore(session.interrupt()))
+    )
+    if (result.status === "interrupted") return yield* new TaskInterruptedError({ child: id })
+    return result
+  })
+})
 
 // ---------------------------------------------------------------------------
 // An agent as supervisor (§4.1)
@@ -463,6 +556,23 @@ export interface Spec<Children extends ReadonlyArray<Child<any, any>>> {
   readonly templates?: Readonly<Record<string, Template>> | undefined
   /** How many children `start_child` may start, over the supervisor's life. Default 8. */
   readonly maxTemplateStarts?: number | undefined
+  /**
+   * Where the supervisor remembers what must survive its own death (§5,
+   * item 138): each child's attempts, in-flight submission and whether it
+   * finished, and the restart history intensity counts. A supervisor started
+   * again over the same ledger, under the same `name`:
+   * - does not start a child that finished normally, unless it is
+   *   `permanent`;
+   * - counts the restarts its predecessor made;
+   * - hands each start its in-flight submission, which `remoteTask` waits on
+   *   instead of submitting again.
+   *
+   * Children the agent started from templates are not recorded: they belong
+   * to one supervisor's life. A ledger that cannot be read or written ends
+   * the supervisor with a defect, since carrying on would forget what the
+   * ledger exists to remember.
+   */
+  readonly ledger?: SupervisorLedger.SupervisorLedger | undefined
   readonly children: Children
 }
 
@@ -686,7 +796,18 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
     const children = (): ReadonlyArray<Child<any, any>> => [...spec.children, ...started]
     const stateOf = (id: string): ChildState => states.get(id)!
     const decisions: Array<Decision> = []
-    let restarts: ReadonlyArray<number> = []
+    const ledger = Option.fromUndefinedOr(spec.ledger)
+    // A ledger failure is a defect: see `Spec.ledger`.
+    const recorded = <A>(effect: (l: SupervisorLedger.SupervisorLedger) => Effect.Effect<A, SupervisorLedger.SupervisorLedgerError>) =>
+      Option.match(ledger, {
+        onNone: () => Effect.succeedNone,
+        onSome: (l) => Effect.asSome(Effect.orDie(effect(l)))
+      })
+    let restarts: ReadonlyArray<number> = Option.getOrElse(
+      yield* recorded((l) => l.restarts(spec.name)),
+      (): ReadonlyArray<number> => []
+    )
+    const fromSpec = new Set(spec.children.map((entry) => entry.id))
     let grantLeft = grantRestarts
     let pending = Option.none<{
       readonly child: string
@@ -703,11 +824,35 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
         state.status = "running"
         const guidance = state.guidance
         state.guidance = Option.none()
+        // Only the spec's own children are recorded: see `Spec.ledger`.
+        const attempt = fromSpec.has(entry.id)
+          ? yield* recorded((l) =>
+            Effect.gen(function*() {
+              // An attempt still open is resumed under its own key; otherwise a
+              // new one is opened, before anything is submitted.
+              const record = yield* l.update(spec.name, entry.id, (r) =>
+                Option.isSome(r.current)
+                  ? r
+                  : { ...r, attempts: r.attempts + 1, current: Option.some({ attempt: r.attempts + 1, submissionId: Option.none() }) })
+              const open = Option.getOrThrow(record.current)
+              return {
+                key: `${spec.name}:${entry.id}:${open.attempt}`,
+                resume: open.submissionId,
+                begin: (submissionId: string) =>
+                  Effect.orDie(l.update(spec.name, entry.id, (r) => ({
+                    ...r,
+                    current: Option.some({ attempt: open.attempt, submissionId: Option.some(submissionId) })
+                  }))).pipe(Effect.asVoid)
+              } satisfies Attempt
+            })
+          )
+          : Option.none<Attempt>()
         const context: ChildContext = {
           id: entry.id,
           scope,
           guidance,
-          publish: (view) => Effect.sync(() => void (stateOf(entry.id).view = Option.some(view)))
+          publish: (view) => Effect.sync(() => void (stateOf(entry.id).view = Option.some(view))),
+          attempt
         }
         const provided = Effect.provideService(entry.run, CurrentChild, Option.some(context))
         const body = Option.match(budget, {
@@ -733,6 +878,8 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
         running.delete(id)
         stateOf(id).status = "stopped"
         yield* Fiber.interrupt(entry.fiber)
+        // The attempt is over: its next start is a new one.
+        if (fromSpec.has(id)) yield* recorded((l) => l.update(spec.name, id, (r) => ({ ...r, current: Option.none() })))
       })
 
     /** Stop every running child, last started first. */
@@ -757,6 +904,7 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
         if ((yield* budget.value.own.spent) >= spec.maxTokens) return Option.some<SupervisorEscalatedError["reason"]>("budget")
       }
       restarts = [...restarts, now]
+      yield* recorded((l) => l.setRestarts(spec.name, restarts))
       return Option.none<SupervisorEscalatedError["reason"]>()
     })
 
@@ -970,6 +1118,12 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
           state.status = "failed"
           state.last = Option.some(describe(exited.exit.cause))
         }
+        if (fromSpec.has(entry.id)) {
+          const normal = Exit.isSuccess(exited.exit)
+          yield* recorded((l) =>
+            l.update(spec.name, entry.id, (r) => ({ ...r, current: Option.none(), finished: r.finished || normal }))
+          )
+        }
         // Before the restart type: an unknown side effect needs someone told,
         // even from a temporary child that would not be restarted anyway.
         if (Exit.isFailure(exited.exit) && unresolved(exited.exit.cause)) {
@@ -1008,7 +1162,15 @@ export const run = Effect.fn("Supervisor.run")(function*<const Children extends 
         return { _tag: "Continue" }
       })
 
-    yield* lock.withPermits(1)(Effect.forEach(spec.children, start, { discard: true }))
+    // A child a previous life of this supervisor saw finish is not started
+    // again, unless it is permanent: see `Spec.ledger`.
+    const due = yield* Effect.filter(spec.children, (entry) =>
+      entry.restart === "permanent"
+        ? Effect.succeed(true)
+        : Effect.map(recorded((l) => l.child(spec.name, entry.id)), (record) =>
+          Option.match(record, { onNone: () => true, onSome: (r) => !r.finished }))
+    )
+    yield* lock.withPermits(1)(Effect.forEach(due, start, { discard: true }))
 
     while (running.size > 0) {
       const exited = yield* Queue.take(exits)

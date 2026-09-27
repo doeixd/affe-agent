@@ -6720,3 +6720,21 @@ still reach the session live, by the fold `DurableModel.streamText` already
 used. No plan is refused any more. A streamed crash test asks the plan's
 provider twice, and three times without the commit. Both commit points share
 the one inventoried cast, so the count stays at 25.
+
+## 2026-09-27 - a supervisor that survives its own death; the Journal seam closed
+
+Item 138. `Supervisor.run` takes a `SupervisorLedger`, in memory or over any
+`KeyValueStore`. `Supervisor.remoteTask` asks a session through an
+`AgentClient`. A supervisor started again over the ledger:
+- waits on its predecessor's run instead of starting another;
+- skips children that finished;
+- counts the restarts already made.
+
+A test against `DurableAgentClient` found that a death between submitting
+and recording made the next life submit under a new key, which was refused
+as busy. Attempts are now opened before anything is submitted.
+
+Item 129 is closed on three slices. The tool slice and the Cloudflare
+journal were decided against, and the ledger gives the reasons: they would
+rename journalled activities and drop durability for the kernel's other
+model callers, for one turn in flight on Cloudflare.

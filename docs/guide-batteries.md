@@ -215,8 +215,34 @@ supervisor checks, in order:
 - `mode: "resubmit"` keeps one session for the supervisor's life and asks it
   again, so a retry sees the failed attempt in its history.
 
-**Limits.** In process only, with restart history in memory. `rewind` is
-specified in `plan-supervision.md` §4, not built.
+**Surviving the supervisor's own death.** Give the spec a `ledger` and use
+`remoteTask` for children whose work outlives the process: a durable session,
+or one reached over RPC or HTTP.
+
+```ts
+const ledger = SupervisorLedger.keyValue(kv) // any KeyValueStore: file, SQL, web storage
+
+yield* Supervisor.run({
+  name: "nightly",
+  ledger,
+  children: [Supervisor.remoteTask("report", { session: client.session(reportSessionId), prompt: "Write tonight's report." })]
+})
+```
+
+A supervisor started again over the same ledger, under the same name:
+- waits on the submission its predecessor was waiting on, instead of asking
+  again;
+- does not rerun a child that finished normally, unless it is `permanent`;
+- counts its predecessor's restarts against its intensity limit.
+
+Each attempt is opened in the ledger before it submits, under the key
+`name:child:n`. A supervisor that died between submitting and recording
+the submission is followed by one that submits under the same key, and a
+durable client still holding that claim rejoins it.
+
+**Limits.** Something must start the supervisor again: the ledger remembers,
+it does not restart. Children started from templates are not recorded.
+`rewind` is specified in `plan-supervision.md` §4, not built.
 
 ### An agent as supervisor
 

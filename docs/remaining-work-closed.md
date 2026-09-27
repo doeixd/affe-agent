@@ -3409,3 +3409,102 @@ verify: grep "only the recipient may reply" test/Messaging.test.ts
      verify: grep "const decision = Recovery.classify(evidence)" src/durable/DurableAgentClient.ts
      verify: grep "ended wins over undelivered answers" test/Recovery.test.ts
      ```
+
+## 2026-09-27 - item 129: the Journal seam, closed on three slices
+
+129. ~~**A `Journal` seam in place of the durable wrapper set (plan 2).**~~
+     **DONE 2026-09-27, as far as it pays. The owner approved the seam, then
+     handed the remaining decisions to the implementer, and the two slices
+     left were decided against, with reasons.**
+     - **Built.** `PLAN.md` §30.1 is amended with the owner's decision and
+       constraint: the seam stays at `step` and a few commit points. There
+       are three slices:
+       1. `Journal.step(name, schema, effect)`: the identity locally, an
+          activity under `/durable` (`DurableJournal`), for anything that
+          runs in a submission;
+       2. the commit points `Journal.modelCall` and `Journal.modelStream`,
+          which the kernel uses under an `ExecutionPlan`, so a durable agent
+          carries a plan, batch or streamed. The ladder is one journalled
+          activity through `DurableModel.wrapWithCommit`, and a streamed
+          ladder still delivers its parts live;
+       3. one body assembly for both durable workflows,
+          `DurableAgent.assemble`. It found that the `DurableAgentClient` path
+          never refused a plan, so its provider calls were repeated on
+          replay.
+     - **Not built: tool calls onto `step`.** `DurableToolkit` already
+       journals tool outcomes, with start markers and parked unknown
+       outcomes (item 133). Moving that onto the seam would change activity
+       names for no behaviour a user sees, and it only pays off with the
+       Cloudflare slice.
+     - **Not built: a Cloudflare journal.** It pays off only if the kernel
+       commits every model call. Under `/durable` that retires
+       `DurableModel`'s substitution, which does two things: it renames
+       `model-N`, stranding journals in flight at deploy, and it drops
+       durability for the model calls the kernel does not make, such as a
+       compaction summariser's. The Cloudflare host already survives process
+       loss at turn granularity, since history and events are written as
+       they commit. The prize is the one turn in flight, which does not buy
+       a versioned cut-over. If a Cloudflare deployment needs mid-turn
+       resume, the way in is a Cloudflare-side model substitution over DO
+       SQLite, as `DurableModel` is over Activity, not a kernel change.
+
+     ```text
+     verify: grep "Amended 2026-09-26, by the owner's decision (item 129)." PLAN.md
+     verify: grep "Effect.provideService(Journal.Journal, journal)," src/durable/DurableAgent.ts
+     verify: grep "const assembled = yield* DurableAgent.assemble(agent, { prefix: scopePrefix })" src/durable/DurableSubmission.ts
+     verify: no-grep "cannot stream under an ExecutionPlan" src/durable/DurableAgent.ts
+     verify: grep "a replayed turn reads the step's recorded value instead of repeating it" test/Journal.test.ts
+     verify: grep "a replayed turn does not ask the plan's provider again" test/Journal.test.ts
+     verify: grep "the durable client runs an execution plan, batch and streamed, and leaves the session idle" test/Durable.test.ts
+     ```
+
+## 2026-09-27 - item 138: a supervisor that survives its own death
+
+138. ~~**A durable supervisor (plan §5).**~~ **DONE 2026-09-27 as a ledger,
+     not an entity.**
+     - **`SupervisorLedger`.** It runs in memory or over any `KeyValueStore`.
+       It records, per child, the attempts, the attempt open now and its
+       submission, and whether the child finished; and, per supervisor, the
+       restart history. `Spec.ledger` makes `run` use it:
+       - a child that finished normally is not rerun unless it is
+         `permanent`;
+       - the predecessor's restarts count against intensity;
+       - each start of a spec child opens an attempt, or resumes the open
+         one.
+     - **`Supervisor.remoteTask`.** It asks a session through any
+       `AgentClient`. It waits on the open attempt's submission when one is
+       recorded; otherwise it submits under the key `name:child:n` and
+       records the submission before waiting. Stopping it interrupts the
+       remote run.
+     - **A design bug, found by the test against `DurableAgentClient`.** The
+       first version counted a new attempt whenever none had a recorded
+       submission. A supervisor that died between submit and record was then
+       followed by one submitting under a new key, which the durable client
+       refused as busy. The attempt is now opened before anything is
+       submitted, and the next life reuses its key and rejoins the claim.
+     - **Not built: the supervisor as a cluster `Entity`.** The ledger is
+       what an entity would have held. Whatever restarts the effect (a
+       scheduled job, a process manager, an entity) gets the behaviour. An
+       entity host waits for a deployment that needs the cluster to be the
+       restarter. Template children are not recorded: they belong to one
+       life.
+
+     `test/SupervisorDurable.test.ts` covers:
+     - a plain remote task;
+     - waiting on a recorded submission;
+     - the order of ledger writes;
+     - skipping a finished child;
+     - inherited and recorded restart history;
+     - the `keyValue` ledger;
+     - the rejoin against a real `DurableAgentClient`.
+
+     Four rules were broken once, and a test failed each time: resuming,
+     skipping, loading the history, and reusing the open attempt. The
+     intensity test first passed with the history ignored, because a child
+     that always fails reaches the limit anyway. It now counts runs.
+
+     ```text
+     verify: exists src/sessions/SupervisorLedger.ts
+     verify: grep "export const remoteTask = <R>(" src/sessions/Supervisor.ts
+     verify: grep "a restarted supervisor rejoins the claim its predecessor took, not a second one" test/SupervisorDurable.test.ts
+     ```

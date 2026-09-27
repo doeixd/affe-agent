@@ -1042,69 +1042,6 @@ owner. Client capabilities were considered and left declined (item 86).*
      verify: grep "as unknown as Toolkit.WithHandler<Tools>[\"handle\"]" src/durable/DurableToolkit.ts
      ```
 
-129. **A `Journal` seam in place of the durable wrapper set (plan 2).
-     Approved by the owner 2026-09-26. `PLAN.md` §30.1 is amended; slices
-     1, 2 and 3 are built.** `/durable` swaps about eight things in the
-     workflow body, and Cloudflare cannot use Workflow at all.
-     - **Slice 1, built.** `Journal.step(name, schema, effect)`. Locally it is
-       the identity. `/durable`'s `DurableJournal` backs it with an activity,
-       provided in both workflow bodies. Anything that runs inside a
-       submission can use it (a transform, a hook, a renderer). A crash test
-       shows a transform's step is not repeated on replay.
-     - **Next slices**, each with the equivalence oracle holding:
-       1. ~~A model call under an `ExecutionPlan`~~ **built 2026-09-27.**
-          `Journal` gained two commit points, `modelCall` and `modelStream`,
-          which the kernel uses only under a plan. A plan's steps provide
-          their own model, which shadows `DurableModel`, so the whole ladder
-          is journalled as one `model-plan-N` activity through `DurableModel`'s
-          codec (`wrapWithCommit`). A streamed ladder's parts still reach the
-          session live, from inside the activity, by the same fold
-          `DurableModel.streamText` uses. No plan is refused any more. A
-          crash test counts the plan's provider calls, batch and streamed: 2
-          with the commit, and 3 without it. The owner had not chosen between
-          streaming and batch-first; batch landed first, then streaming, as
-          the commit point's shape turned out to need nothing new.
-          Other model calls stay on `DurableModel`, and their activity names
-          are unchanged, so journals in flight still replay.
-       2. tool calls onto `step`, retiring the outcome half of
-          `DurableToolkit`. The start marker stays.
-       3. ~~one shared body assembly for `DurableAgent` and
-          `DurableSubmission`~~ **built 2026-09-26** as `DurableAgent.assemble`.
-          It found a bug: only `DurableAgent` refused an `ExecutionPlan`, so an
-          agent with one ran under `DurableAgentClient` with its provider
-          calls outside the journal, repeated on replay. The refusal now lives
-          in the assembly's `admit`, inside each body's scope, so under the
-          client it frees the session. Since slice 2 no plan is refused. Refusing before that scope left the
-          session claimed; a test pins both.
-       4. a Cloudflare `Journal` over DO SQLite, so a crash there resumes
-          the turn in flight. **Depends on a decision found 2026-09-27.** It
-          pays off only if the kernel commits *every* model call, not only a
-          plan's ladder. Under `/durable` that means retiring `DurableModel`'s
-          substitution, which renames the `model-N` activities, so journals in
-          flight when the change deploys would not replay. That trade (a
-          versioned cut-over, or a compatibility reader for old names) is the
-          owner's to make before this slice starts.
-     - **The question slice 1 settled.** `step` takes an effect that cannot
-       fail. A typed error cannot be rebuilt from a journal without its
-       schema, and a replay would then fail differently from the run it
-       replays. The model and tool slices already carry failures as values
-       (`ModelOutcome`, `Outcome`), so they fit.
-     - **The owner's constraint**: the seam stays at `step` and a few commit
-       points (plan §7.1: `effect-agent`'s hook bag is the warning).
-
-     Large, in slices.
-
-     ```text
-     verify: no-grep "cannot stream under an ExecutionPlan" src/durable/DurableAgent.ts
-     verify: grep "Workflow stalls on workerd" src/cloudflare/index.ts
-     verify: grep "Amended 2026-09-26, by the owner's decision (item 129)." PLAN.md
-     verify: grep "Effect.provideService(Journal.Journal, journal)," src/durable/DurableAgent.ts
-     verify: grep "a replayed turn reads the step's recorded value instead of repeating it" test/Journal.test.ts
-     verify: grep "const assembled = yield* DurableAgent.assemble(agent, { prefix: scopePrefix })" src/durable/DurableSubmission.ts
-     verify: grep "the durable client runs an execution plan, batch and streamed, and leaves the session idle" test/Durable.test.ts
-     verify: grep "a replayed turn does not ask the plan's provider again" test/Journal.test.ts
-     ```
-
 131. **Version the core apart from experimental subpaths (plan 6). Gated on
      the owner's release plans; decide before 1.0.** One package, one
      version, 53 import subpaths, most labelled experimental, so the "core"
@@ -1129,16 +1066,6 @@ items 139 and 140) landed the same day and are in the ledger.*
 
      ```text
      verify: no-grep "rewind" src/sessions/Supervisor.ts
-     ```
-
-138. **A durable supervisor (plan §5).** A supervisor as a cluster
-     `Entity`, with restart history in entity state and its children as
-     durable sessions. It was gated on item 133, because an auto-restarting
-     durable child must be able to park an unknown outcome first. That is
-     now possible for a tool marked `askWhenUnknown` (2026-09-26). Large.
-
-     ```text
-     verify: no-grep "Supervisor" src/cluster/AgentEntity.ts
      ```
 
 ### The next milestone (2026-09-06) — [plan-next-milestone.md](./plan-next-milestone.md)

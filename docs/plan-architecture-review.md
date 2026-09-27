@@ -10,12 +10,12 @@ Status: **proposal**, except items built 2026-09-26:
 - item 134 (§7.3), as `DurableEquivalence.sweep` with stores of your own;
 - item 135 (§7.3), as `/durable`'s `Recovery`: `classify`, `explain` and
   `inspect`;
-- item 129 (§2), slices 1, 2 and 3: `Journal.step`, with `/durable`'s
+- item 129 (§2), closed on slices 1, 2 and 3: `Journal.step`, with `/durable`'s
   `DurableJournal`; one body assembly for both durable workflows; and the
   commit points `Journal.modelCall` and `Journal.modelStream`, so a durable
-  agent carries an `ExecutionPlan`;
-  The owner approved it and `PLAN.md` §30.1 is amended. The later slices
-  are in the ledger;
+  agent carries an `ExecutionPlan`. The owner approved it and `PLAN.md`
+  §30.1 is amended. The tool and Cloudflare slices were decided against;
+  the ledger says why;
 - item 130 (§4), as an in-process session's bounded event record. The
   host's tail is kept for finite reads, as the ledger says why. Items 125–132 in
 [remaining-work.md](./remaining-work.md) track each part, and each item

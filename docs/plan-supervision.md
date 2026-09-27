@@ -6,8 +6,8 @@ Status: **in progress.**
 - §4 (an in-process supervisor) is **built, 2026-09-26**, with `fresh`
   restarts (item 137).
 - §4.1 (an agent as supervisor) is items 139 and 140.
-- §5 (a durable supervisor) is item 138. It was parked behind item 133,
-  which landed 2026-09-26.
+- §5 (a durable supervisor) is item 138: slice 1, a ledger and `remoteTask`,
+  landed 2026-09-27.
 
 Written 2026-09-26, after a source review of `danieljvdm/effect-agent`
 ([plan-architecture-review.md](./plan-architecture-review.md) §7). The owner
@@ -291,12 +291,30 @@ needs `maxTokens` itself to cover the agent.
 
 **Not built.** `rewind` waits on a use (item 141).
 
-## 5. A durable supervisor (parked)
+## 5. A durable supervisor (slice 1 built 2026-09-27)
 
 A supervisor as a cluster `Entity`:
 - restart history lives in entity state;
 - children are durable sessions reached through `DurableAgentClient`;
 - monitor cursors are stored with the entity.
+
+**Built, slice 1 (item 138).** Not an entity: the supervisor stays an
+ordinary effect, and what must survive its death is written to a
+`SupervisorLedger` over any `KeyValueStore`. That ledger holds, per child,
+the attempts, the attempt open now and its submission, and whether the
+child finished. It also holds the supervisor's restart history.
+`remoteTask` asks a session through an `AgentClient`, and a supervisor
+restarted over the ledger waits on its predecessor's run instead of starting
+another. An attempt is opened before it submits, so a death between the
+submit and the record is followed by a submit under the same key, which a
+durable client rejoins. That window was found by a test against
+`DurableAgentClient`: counting a new attempt there was refused as busy.
+
+Deliberately not built: hosting the supervisor as a cluster `Entity`, so that
+something restarts it. The ledger is what an entity would have held, and a
+host that restarts the effect (a scheduled job, a process manager, an
+entity) gets the same behaviour from it. That waits for a deployment that
+needs the cluster to be the restarter.
 
 **Was gated on item 133, done 2026-09-26.** An auto-restarting durable child
 must first be able to park an unknown outcome instead of dying, or every

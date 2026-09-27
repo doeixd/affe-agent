@@ -59,6 +59,7 @@
   "SessionNotIndexed",
   "StorageError",
   "SupervisorEscalatedError",
+  "SupervisorLedgerError",
   "TaskInterruptedError",
   "ToolApprovalRequiredError",
   "ToolBatchRejectedError",
